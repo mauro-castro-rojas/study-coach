@@ -9,9 +9,12 @@ const appState = {
   heartbeatHandle: null,
   localClockHandle: null,
   readerPage: 1,
+  pageReads: [],
+  pageReadPending: false,
   toastHandle: null,
   targetAlertSessionId: null,
   targetAlertDismissed: false,
+  targetAlertToastShown: false,
   targetSoundPlayedForSession: null,
   audioContext: null,
   records: [],
@@ -90,7 +93,7 @@ function bindPdfViewer(frameId) {
       appState.readerPage = page;
       if (frameId === "pdfFrame") {
         $("pdfCurrentPage").textContent = `Current viewer page: ${page}`;
-        $("readPageWithCoach").disabled = !application.pdfDocument;
+        updatePageReadControl();
       } else if (frameId === "previewPdfFrame") {
         $("startPositionInput").value = String(page);
       }
@@ -100,6 +103,24 @@ function bindPdfViewer(frameId) {
     syncPage();
   };
   attach();
+}
+
+function updatePageReadControl() {
+  const control = $("readPageWithCoach");
+  if (!control) return;
+  const page = Number(appState.readerPage);
+  const recorded = appState.pageReads.some((item) => Number(item.viewer_page) === page);
+  const loaded = Boolean($("pdfFrame").contentWindow?.PDFViewerApplication?.pdfDocument);
+  control.checked = recorded;
+  control.disabled = appState.pageReadPending || !loaded || !page || recorded || $("sendButton").disabled;
+  $("pageReadLabel").textContent = recorded ? "Page recorded" : "Mark this page as read";
+  const requiresPage = appState.session?.reference_kind === "book" && appState.session?.mode !== "assessment";
+  const needsReadPage = requiresPage && appState.pageReads.length === 0;
+  $("finishButton").disabled = Boolean(needsReadPage || appState.pageReadPending);
+  $("pdfFinishHint").textContent = appState.pageReadPending
+    ? "Wait for this page to finish saving before ending the session."
+    : "Mark at least one PDF page as read to finish and log this lesson.";
+  $("pdfFinishHint").classList.toggle("hidden", !needsReadPage && !appState.pageReadPending);
 }
 
 function setPdfPage(reference, page, frameId, inputId, labelId) {
@@ -118,9 +139,35 @@ function setPdfPage(reference, page, frameId, inputId, labelId) {
 function toast(message) {
   const node = $("toast");
   node.textContent = message;
-  node.classList.add("show");
+  if (node.matches(":popover-open")) node.hidePopover();
+  node.showPopover();
   clearTimeout(appState.toastHandle);
-  appState.toastHandle = setTimeout(() => node.classList.remove("show"), 3400);
+  appState.toastHandle = setTimeout(() => {
+    if (node.matches(":popover-open")) node.hidePopover();
+  }, 3400);
+}
+
+function promoteToast() {
+  const node = $("toast");
+  if (!node.matches(":popover-open")) return;
+  const message = node.textContent;
+  node.hidePopover();
+  node.textContent = message;
+  node.showPopover();
+}
+
+function openModal(dialog) {
+  if (!dialog.open) dialog.showModal();
+  promoteToast();
+  notifyTargetAlertAboveModal();
+}
+
+function notifyTargetAlertAboveModal() {
+  const alert = $("targetAlert");
+  if (!alert || alert.classList.contains("hidden") || appState.targetAlertToastShown) return;
+  if (!document.querySelector('dialog[open]:not(#toast)')) return;
+  appState.targetAlertToastShown = true;
+  toast(alert.querySelector("span").textContent);
 }
 
 async function loadConfig() {
@@ -325,7 +372,7 @@ function openSetup(topicId, referenceId) {
   $("durationSelect").value = "open";
   $("soundReminder").checked = false;
   syncModeFields();
-  $("setupDialog").showModal();
+  openModal($("setupDialog"));
 }
 
 function selectedMinutes() {
@@ -395,7 +442,7 @@ function showPositioning(reference) {
   updateOpenSessionCard();
   $("beginButton").disabled = false;
   $("beginButton").textContent = "Begin lesson →";
-  $("positionDialog").showModal();
+  openModal($("positionDialog"));
 }
 
 function openReferenceTab(reference) {
@@ -557,10 +604,82 @@ async function readStudyRecord(record, selectedButton) {
       content.replaceChildren(label, transcript);
     } else {
       label.textContent = record.kind === "weekly" ? "WEEKLY SUMMARY" : "SESSION LOG";
-      const documentView = document.createElement("div");
-      documentView.className = "markdown-document";
-      documentView.innerHTML = renderMarkdown(data.content);
-      content.replaceChildren(label, documentView);
+      if (record.kind === "sessions") {
+        const pages = data.page_reads || [];
+        const sectionStart = data.content.indexOf("\n## Pages read\n");
+        const hasSummarySection = sectionStart >= 0;
+        const rawSummaryMarkdown = hasSummarySection ? data.content.slice(sectionStart).trim() : "";
+        const trailingNotes = rawSummaryMarkdown.match(/\n(- Score:.*(?:\r?\n- Grade notes:.*)?\s*)$/)?.[1] || "";
+        const summaryMarkdown = rawSummaryMarkdown.replace(/\n- Score:[\s\S]*$/, "");
+        let logMarkdown = hasSummarySection
+          ? `${data.content.slice(0, sectionStart).trimEnd()}${trailingNotes ? `\n${trailingNotes.trim()}` : ""}`
+          : data.content;
+        if (pages.length) {
+          logMarkdown = logMarkdown.replace(/^- Concepts:\r?\n(?:[ \t]+- .*\r?\n?)*/m, "");
+        }
+        const hasSummaries = pages.length > 0 || hasSummarySection;
+        const viewButton = document.createElement("button");
+        viewButton.type = "button";
+        viewButton.className = "record-summary-toggle";
+        viewButton.setAttribute("aria-controls", "recordSummaryView");
+        viewButton.setAttribute("aria-expanded", "false");
+        const documentView = document.createElement("div");
+        documentView.className = "markdown-document";
+        documentView.id = "recordSummaryView";
+        let showingSummaries = false;
+        const renderCurrentView = () => {
+          if (!showingSummaries) {
+            documentView.innerHTML = renderMarkdown(logMarkdown);
+            viewButton.textContent = hasSummaries
+              ? `Show page summaries${pages.length ? ` (${pages.length})` : ""}`
+              : "No page summaries recorded";
+            viewButton.disabled = !hasSummaries;
+            return;
+          }
+          if (!pages.length) {
+            documentView.innerHTML = renderMarkdown(summaryMarkdown);
+            return;
+          }
+          documentView.replaceChildren();
+          for (const page of pages) {
+            const pageSection = document.createElement("section");
+            pageSection.className = "record-page-summary";
+            const heading = document.createElement("h3");
+            heading.textContent = `PDF viewer page ${page.viewer_page}${page.printed_page ? ` · printed page ${page.printed_page}` : ""}`;
+            const summary = document.createElement("div");
+            summary.className = "markdown-document";
+            summary.innerHTML = renderMarkdown(page.summary);
+            pageSection.append(heading, summary);
+            const concepts = (page.concepts || []).slice(0, 3);
+            if (concepts.length) {
+              const conceptHeading = document.createElement("h4");
+              conceptHeading.textContent = "Key concepts";
+              const list = document.createElement("ul");
+              for (const concept of concepts) {
+                const item = document.createElement("li");
+                item.textContent = concept;
+                list.append(item);
+              }
+              pageSection.append(conceptHeading, list);
+            }
+            documentView.append(pageSection);
+          }
+        };
+        viewButton.addEventListener("click", () => {
+          showingSummaries = !showingSummaries;
+          viewButton.setAttribute("aria-expanded", String(showingSummaries));
+          viewButton.textContent = showingSummaries ? "Back to session log" : `Show page summaries (${pages.length})`;
+          documentView.innerHTML = "";
+          renderCurrentView();
+        });
+        renderCurrentView();
+        content.replaceChildren(label, ...(hasSummaries ? [viewButton] : []), documentView);
+      } else {
+        const documentView = document.createElement("div");
+        documentView.className = "markdown-document";
+        documentView.innerHTML = renderMarkdown(data.content);
+        content.replaceChildren(label, documentView);
+      }
     }
   } catch (error) {
     content.replaceChildren();
@@ -643,7 +762,7 @@ async function openStudyRecords() {
   });
   $("recordsList").replaceChildren();
   $("recordContent").innerHTML = '<div class="record-placeholder">Loading study records…</div>';
-  dialog.showModal();
+  if (!dialog.open) openModal(dialog);
   try {
     const data = await api("/api/records");
     appState.records = data.records;
@@ -664,6 +783,37 @@ async function openStudyRecords() {
     renderRecordList(true);
   } catch (error) {
     $("recordContent").textContent = error.message;
+  }
+}
+
+async function clearStudyRecords(event) {
+  event.preventDefault();
+  const confirmButton = $("confirmClearRecords");
+  const status = $("clearRecordsStatus");
+  confirmButton.disabled = true;
+  status.textContent = "Clearing saved study records…";
+  try {
+    const result = await api("/api/records/clear", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    $("clearRecordsDialog").close();
+    status.textContent = "";
+    if (result.export_errors) {
+      toast(`Database cleared, but ${result.export_errors} generated file(s) could not be deleted.`);
+    } else {
+      toast(`Study records cleared. Removed ${result.sessions} session(s) and ${result.exports} generated file(s).`);
+    }
+    try {
+      await loadDashboard();
+      await openStudyRecords();
+    } catch {
+      toast("Records were cleared, but the dashboard could not refresh. Reload the page to update it.");
+    }
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    confirmButton.disabled = false;
   }
 }
 
@@ -698,8 +848,8 @@ async function streamChat(sessionId, text, initial = false, imageDataUrl = null,
   const status = $("coachStatus");
   if (!initial) appendMessage("user", text, imageDataUrl);
   send.disabled = true;
-  $("readPageWithCoach").disabled = true;
-  status.textContent = imageDataUrl ? `Reading PDF viewer page ${pageNumber}…` : "Thinking through your lesson…";
+  updatePageReadControl();
+  status.textContent = "Thinking through your lesson…";
   let assistantNode = null;
   let assistantText = "";
   try {
@@ -746,29 +896,31 @@ async function streamChat(sessionId, text, initial = false, imageDataUrl = null,
   } catch (error) {
     appendMessage("error", error.message);
     status.textContent = "Connection needs attention";
+    if (document.querySelector('dialog[open]:not(#toast)')) toast(error.message);
   } finally {
     send.disabled = false;
-    $("readPageWithCoach").disabled = appState.reference?.kind !== "book"
-      || !$("pdfFrame").contentWindow?.PDFViewerApplication?.pdfDocument;
+    updatePageReadControl();
     $("chatInput").focus();
   }
 }
 
-async function readCurrentPageWithCoach() {
+async function markCurrentPageRead() {
   if (!appState.session || !appState.reference || appState.reference.kind !== "book") return;
-  if ($("sendButton").disabled) {
-    toast("Wait for the current Coach reply to finish first.");
-    return;
-  }
+  if ($("sendButton").disabled || appState.pageReadPending) return;
   const viewer = $("pdfFrame").contentWindow?.PDFViewerApplication;
   const pageNumber = Number(viewer?.pdfViewer?.currentPageNumber || 0);
   if (!viewer?.pdfDocument || !Number.isInteger(pageNumber) || pageNumber < 1) {
     toast("The PDF page is still loading. Try again in a moment.");
     return;
   }
-  const button = $("readPageWithCoach");
-  button.disabled = true;
-  button.textContent = "Preparing page…";
+  const control = $("readPageWithCoach");
+  if (appState.pageReads.some((item) => Number(item.viewer_page) === pageNumber)) return;
+  appState.pageReadPending = true;
+  $("sendButton").disabled = true;
+  $("chatInput").disabled = true;
+  control.checked = false;
+  updatePageReadControl();
+  $("pageReadLabel").textContent = "Saving progress…";
   try {
     const page = await viewer.pdfDocument.getPage(pageNumber);
     const textContent = await page.getTextContent();
@@ -777,7 +929,7 @@ async function readCurrentPageWithCoach() {
       .join("")
       .replace(/[\t ]+/g, " ")
       .trim()
-      .slice(0, 10000);
+      .slice(0, 20000);
     const baseViewport = page.getViewport({ scale: 1 });
     const scale = Math.min(1.8, 1900 / Math.max(baseViewport.width, baseViewport.height));
     const viewport = page.getViewport({ scale });
@@ -786,27 +938,62 @@ async function readCurrentPageWithCoach() {
     canvas.height = Math.ceil(viewport.height);
     await page.render({ canvas, canvasContext: canvas.getContext("2d"), viewport }).promise;
     const imageDataUrl = canvas.toDataURL("image/jpeg", 0.86);
-    const text = [
-      `Read PDF viewer page ${pageNumber} of “${appState.reference.title}” with me.`,
-      "Use the attached page image to understand both its text and any diagrams. The extracted text below is a reading aid; if it is empty or garbled, rely on the image and say if anything is unclear.",
-      pageText ? `\nExtracted page text:\n${pageText}` : "\nThe page contains no selectable text; inspect the attached image directly.",
-      "Give me a concise, clearly formatted summary of the main ideas, explain any important diagram or command, then ask one useful retrieval question. Stay available for my questions and do not claim details you cannot read.",
-    ].join("\n\n");
-    await streamChat(appState.session.id, text, false, imageDataUrl, pageNumber);
+    const response = await fetch(`/api/session/${appState.session.id}/read-page`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ page_number: pageNumber, page_text: pageText, image_data_url: imageDataUrl }),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.error || `Could not save this page (${response.status}).`);
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let recorded = false;
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const packets = buffer.split("\n\n");
+      buffer = packets.pop() || "";
+      for (const packet of packets) {
+        const eventLine = packet.split("\n").find((line) => line.startsWith("event: "));
+        const dataLine = packet.split("\n").find((line) => line.startsWith("data: "));
+        if (!eventLine || !dataLine) continue;
+        const eventName = eventLine.slice(7);
+        const data = JSON.parse(dataLine.slice(6));
+        if (eventName === "error") throw new Error(data.error || "Could not save this page.");
+        if (eventName === "page_recorded") {
+          recorded = true;
+          appState.pageReads.push({ viewer_page: data.viewer_page, printed_page: data.printed_page });
+          appState.session.page_reads = appState.pageReads;
+          if (data.exercise_message) appendMessage("assistant", data.exercise_message);
+          updatePageReadControl();
+          toast(`PDF viewer page ${data.viewer_page} saved to this session.`);
+        }
+      }
+    }
+    if (!recorded) throw new Error("Could not save this page. Please try again.");
   } catch (error) {
-    toast(`Could not prepare this PDF page: ${error.message}`);
+    control.checked = false;
+    toast(error.message);
   } finally {
-    button.textContent = "✳ Read this page with Coach";
-    button.disabled = appState.reference?.kind !== "book"
-      || !$("pdfFrame").contentWindow?.PDFViewerApplication?.pdfDocument;
+    appState.pageReadPending = false;
+    $("sendButton").disabled = false;
+    $("chatInput").disabled = false;
+    updatePageReadControl();
   }
 }
 
 function showSession(session, messages = []) {
   appState.session = session;
+  appState.pageReads = session.page_reads || [];
+  appState.pageReadPending = false;
   if (appState.targetAlertSessionId !== session.id) {
     appState.targetAlertSessionId = session.id;
     appState.targetAlertDismissed = false;
+    appState.targetAlertToastShown = false;
     appState.targetSoundPlayedForSession = null;
   }
   $("timerCard").classList.remove("target-reached");
@@ -823,9 +1010,12 @@ function showSession(session, messages = []) {
   $("sessionReference").textContent = session.reference_title;
   $("sessionModeBadge").textContent = session.mode === "assessment" ? "PRACTICE TEST" : "GUIDED STUDY";
   const hasPdf = session.reference_kind === "book" && session.mode !== "assessment";
+  const needsReadPage = hasPdf && appState.pageReads.length === 0;
   const hasVideo = session.reference_kind === "video" && session.mode !== "assessment";
   $("pdfReader").classList.toggle("hidden", !hasPdf);
   $("readPageWithCoach").disabled = true;
+  $("pdfFinishHint").classList.toggle("hidden", !needsReadPage);
+  $("finishButton").disabled = needsReadPage;
   $("pdfCurrentPage").textContent = "Current viewer page: loading…";
   $("videoReader").classList.toggle("hidden", !hasVideo);
   $("assessmentReader").classList.toggle("hidden", session.mode !== "assessment");
@@ -836,6 +1026,7 @@ function showSession(session, messages = []) {
     const startPage = Number(session.start_position) || 1;
     setPdfPage(appState.reference, startPage, "pdfFrame");
   }
+  updatePageReadControl();
   const label = session.reference_kind === "book" ? "PDF page" : "Video position";
   $("sessionStartPosition").textContent = session.start_position ? `${label} ${session.start_position}` : "Closed book · no reference open";
   $("targetLabel").textContent = session.planned_seconds ? `Target ${duration(session.planned_seconds)}` : "Open-ended";
@@ -849,7 +1040,9 @@ function showSession(session, messages = []) {
   } else {
     const empty = document.createElement("div");
     empty.className = "empty-chat";
-    empty.innerHTML = "<span>✳</span><p>Your lesson will begin here.</p><small>Ask questions, work through examples, and share your exercise results.</small>";
+    empty.innerHTML = hasPdf
+      ? "<span>✳</span><p>Read at your pace.</p><small>Mark each PDF page after reading it. Ask the Coach when you want help with the material.</small>"
+      : "<span>✳</span><p>Your lesson is ready.</p><small>Ask the Coach about the selected topic whenever you want help.</small>";
     $("chatMessages").append(empty);
   }
   $("chatInput").disabled = false;
@@ -860,7 +1053,7 @@ function showSession(session, messages = []) {
     $("coachStatus").textContent = "Session paused";
   } else {
     $("pauseButton").textContent = "Pause";
-    $("coachStatus").textContent = messages.length ? "Here with you" : "Starting your lesson…";
+    $("coachStatus").textContent = messages.length ? "Here with you" : "Ready when you are";
   }
   if (appState.heartbeatHandle) clearInterval(appState.heartbeatHandle);
   appState.heartbeatHandle = setInterval(async () => {
@@ -896,6 +1089,7 @@ function renderTimer() {
     if (!appState.targetAlertDismissed) {
       $("timerCard").classList.add("target-reached");
       $("targetAlert").classList.remove("hidden");
+      notifyTargetAlertAboveModal();
     }
     if (appState.session.sound_on_target && appState.targetSoundPlayedForSession !== appState.session.id) {
       appState.targetSoundPlayedForSession = appState.session.id;
@@ -937,7 +1131,7 @@ async function beginSession(mode, startPosition) {
   $("setupDialog").close();
   $("positionDialog").close();
   showSession(response.session);
-  await streamChat(response.session.id, "", true);
+  if (mode === "assessment") await streamChat(response.session.id, "", true);
   await loadDashboard();
 }
 
@@ -1016,7 +1210,7 @@ function openFinishDialog() {
   $("gradeNotesInput").value = "";
   $("exerciseRows").replaceChildren();
   addExerciseRow();
-  $("finishDialog").showModal();
+  openModal($("finishDialog"));
 }
 
 async function saveFinish(event) {
@@ -1034,6 +1228,12 @@ async function saveFinish(event) {
     score: $("scoreInput").value,
     grade_notes: $("gradeNotesInput").value,
   };
+  await completeSession(payload);
+}
+
+async function completeSession(payload) {
+  if (!appState.session) return;
+  const isPdfLesson = appState.session.reference_kind === "book" && appState.session.mode !== "assessment";
   try {
     await api(`/api/session/${appState.session.id}/finish`, { method: "POST", body: JSON.stringify(payload) });
     $("finishDialog").close();
@@ -1042,7 +1242,7 @@ async function saveFinish(event) {
     $("sessionView").classList.add("hidden");
     $("dashboardView").classList.remove("hidden");
     await loadDashboard();
-    toast("Session saved. Your book/video cursor is ready for next time.");
+    toast(isPdfLesson ? "PDF lesson finished and logged." : "Session saved. Your book/video cursor is ready for next time.");
   } catch (error) {
     toast(error.message);
   }
@@ -1095,7 +1295,9 @@ function showDashboard() {
 function wireEvents() {
   $("pdfFrame").addEventListener("load", () => bindPdfViewer("pdfFrame"));
   $("previewPdfFrame").addEventListener("load", () => bindPdfViewer("previewPdfFrame"));
-  $("readPageWithCoach").addEventListener("click", readCurrentPageWithCoach);
+  $("readPageWithCoach").addEventListener("change", (event) => {
+    if (event.currentTarget.checked) markCurrentPageRead();
+  });
   $("topicSelect").addEventListener("change", () => { populateReferences(); syncModeFields(); });
   $("referenceSelect").addEventListener("change", () => { populateReferences($("referenceSelect").value); syncModeFields(); });
   $("durationSelect").addEventListener("change", syncModeFields);
@@ -1170,13 +1372,20 @@ function wireEvents() {
   $("openVideoReference").addEventListener("click", () => {
     if (appState.reference) openReferenceTab(appState.reference);
   });
-  $("finishButton").addEventListener("click", openFinishDialog);
+  $("finishButton").addEventListener("click", () => {
+    if (appState.session?.reference_kind === "book" && appState.session.mode !== "assessment") {
+      completeSession({ end_position: "", concepts: "", exercises: [] });
+    } else {
+      openFinishDialog();
+    }
+  });
   $("cancelFinish").addEventListener("click", () => $("finishDialog").close());
   $("finishForm").addEventListener("submit", saveFinish);
   $("addExercise").addEventListener("click", addExerciseRow);
   $("pauseButton").addEventListener("click", pauseOrResume);
   $("chatForm").addEventListener("submit", (event) => {
     event.preventDefault();
+    if ($("sendButton").disabled) return;
     const text = $("chatInput").value.trim();
     if (!text || !appState.session) return;
     $("chatInput").value = "";
@@ -1193,6 +1402,14 @@ function wireEvents() {
   $("refreshButton").addEventListener("click", () => loadDashboard().catch((error) => toast(error.message)));
   $("openRecords").addEventListener("click", () => openStudyRecords());
   $("closeRecords").addEventListener("click", () => $("recordsDialog").close());
+  $("clearRecordsButton").addEventListener("click", () => {
+    $("clearRecordsStatus").textContent = "";
+    $("confirmClearRecords").disabled = false;
+    openModal($("clearRecordsDialog"));
+    $("confirmClearRecords").focus();
+  });
+  $("cancelClearRecords").addEventListener("click", () => $("clearRecordsDialog").close());
+  $("clearRecordsForm").addEventListener("submit", clearStudyRecords);
   $("recordsDialog").querySelectorAll(".record-tab").forEach((tab) => {
     tab.addEventListener("click", () => {
       appState.recordsKind = tab.dataset.recordKind;

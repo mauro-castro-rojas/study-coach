@@ -73,7 +73,7 @@
               <button id="toggleStudyPanel" class="button button-quiet panel-toggle" type="button" aria-expanded="true">Hide study panel</button>
             </div>
             <div id="pdfReader" class="pdf-reader hidden">
-              <div class="pdf-reader-actions"><div class="pdf-reader-page-info"><span id="pdfCurrentPage" aria-live="polite">Current viewer page: —</span><small>Only this page is sent to Codex when you click.</small></div><button id="readPageWithCoach" class="button button-primary" type="button" title="Send the current page image and text to your configured Codex account" disabled>✳ Read this page with Coach</button></div>
+              <div class="pdf-reader-actions"><div class="pdf-reader-page-info"><span id="pdfCurrentPage" aria-live="polite">Current viewer page: —</span><small>Mark a page after you finish reading it. It will be summarized in your session record.</small></div><label class="page-read-control"><input id="readPageWithCoach" type="checkbox" disabled><span class="page-read-check" aria-hidden="true">✓</span><span id="pageReadLabel">Mark this page as read</span></label></div>
               <iframe id="pdfFrame" title="PDF reference" src="about:blank"></iframe>
             </div>
             <div id="videoReader" class="video-reader hidden">
@@ -91,6 +91,7 @@
               <div class="timer-progress"><span id="timerProgress"></span></div>
               <div id="targetAlert" class="target-alert hidden" role="status" aria-live="polite"><span>Your time goal is up. Take a break or keep going.</span><button id="dismissTargetAlert" type="button">Continue</button></div>
               <div class="timer-actions"><button id="pauseButton" class="button button-quiet" type="button">Pause</button><button id="finishButton" class="button button-primary" type="button">Finish & log</button></div>
+              <p id="pdfFinishHint" class="timer-footnote hidden">Mark at least one PDF page as read to finish and log this lesson.</p>
               <p id="timerFootnote" class="timer-footnote">Only active study time is counted. Pause whenever you step away.</p>
             </section>
             <div class="position-card"><div><span class="position-icon">⌖</span><span><small>STARTING POINT</small><strong id="sessionStartPosition">—</strong></span></div></div>
@@ -106,7 +107,7 @@
   </div>
 
   <dialog id="recordsDialog" class="records-dialog">
-    <header class="records-header"><div><p class="eyebrow">YOUR STUDY ARCHIVE</p><h2>Study records</h2></div><button id="closeRecords" class="records-close" type="button" aria-label="Close study records">×</button></header>
+    <header class="records-header"><div><p class="eyebrow">YOUR STUDY ARCHIVE</p><h2>Study records</h2></div><div class="records-header-actions"><button id="clearRecordsButton" class="button button-danger" type="button">Clear study records</button><button id="closeRecords" class="records-close" type="button" aria-label="Close study records">×</button></div></header>
     <div class="records-controls">
       <div class="record-tabs" role="tablist" aria-label="Study record type">
         <button class="record-tab selected" type="button" role="tab" aria-selected="true" data-record-kind="sessions">Session logs</button>
@@ -124,6 +125,16 @@
       <article id="recordContent" class="record-content"><div class="record-placeholder">Choose a session log or weekly summary to read it here.</div></article>
     </div>
     <footer class="records-pagination"><span id="recordPageInfo" aria-live="polite"></span><div><button id="recordsPrevPage" class="button button-quiet" type="button">← Previous</button><button id="recordsNextPage" class="button button-quiet" type="button">Next →</button></div></footer>
+  </dialog>
+
+  <dialog id="clearRecordsDialog" class="dialog-card clear-records-dialog">
+    <form id="clearRecordsForm">
+      <p class="eyebrow">PERMANENT ACTION</p>
+      <h2>Clear study records?</h2>
+      <p class="dialog-intro">This deletes saved sessions, Coach conversations, exercises, and Study Room generated session logs and weekly summaries. Saved PDF/video resume positions and manually written Markdown files are kept.</p>
+      <p class="clear-records-status" id="clearRecordsStatus" role="status" aria-live="polite"></p>
+      <div class="setup-actions"><button id="cancelClearRecords" class="button button-quiet" type="button">Cancel</button><button id="confirmClearRecords" class="button button-danger" type="submit">Clear records</button></div>
+    </form>
   </dialog>
 
   <dialog id="setupDialog" class="dialog-card">
@@ -162,12 +173,12 @@
 
   <dialog id="finishDialog" class="dialog-card finish-dialog">
     <p class="eyebrow">SAVE YOUR PROGRESS</p>
-    <h2>What did you cover?</h2>
-    <p class="dialog-intro">A quick record now makes your next lesson—and your dashboard—more useful.</p>
+    <h2 id="finishTitle">What did you cover?</h2>
+    <p id="finishIntro" class="dialog-intro">A quick record now makes your next lesson—and your dashboard—more useful.</p>
     <form id="finishForm">
       <label id="endPositionLabel">Ending PDF page<input id="endPositionInput" inputmode="numeric" placeholder="e.g. 48"></label>
-      <label>Key concepts<textarea id="conceptsInput" rows="2" placeholder="What ideas did you work through?"></textarea></label>
-      <div class="exercise-heading"><strong>Exercises</strong><button id="addExercise" class="text-button" type="button">+ Add one</button></div>
+      <label id="conceptsLabel">Key concepts<textarea id="conceptsInput" rows="2" placeholder="What ideas did you work through?"></textarea></label>
+      <div id="exerciseHeading" class="exercise-heading"><strong>Exercises</strong><button id="addExercise" class="text-button" type="button">+ Add one</button></div>
       <div id="exerciseRows" class="exercise-rows"></div>
       <label id="scoreWrap" class="hidden">Assessment score (0–10)<input id="scoreInput" type="number" min="0" max="10" step="0.5"></label>
       <label id="gradeNotesWrap" class="hidden">Grade notes<textarea id="gradeNotesInput" rows="2" placeholder="Evidence, strengths, and what to review"></textarea></label>
@@ -175,6 +186,6 @@
     </form>
   </dialog>
 
-  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <div id="toast" class="toast" popover="manual" role="status" aria-live="polite"></div>
 </body>
 </html>

@@ -31,17 +31,25 @@ The Study Coach panel can be hidden to widen the reader and shown again at any
 time. The time card displays elapsed active-study time and a live local clock
 in `America/Bogota`. The locally bundled Mozilla PDF.js v6.4.299 reader renders
 the OneDrive-backed file in the page and keeps its built-in page controls (the
-upstream license is included at `web/pdfjs/LICENSE`). During a book lesson,
-**Read this page with Coach** sends the current page image and extracted text on
-request. The Coach can then summarize text and diagrams and answer questions
-about that page. Page changes are not sent automatically. The page image is
-passed to the configured Codex account and is not stored in the Study Room
-database; the Coach conversation text is saved with the session.
+upstream license is included at `web/pdfjs/LICENSE`). During a PDF lesson, mark
+a page as read after you finish it. Only that explicit action sends the current
+page image and extracted text to Codex. The app saves the PDF viewer page, the
+printed page label when readable, a concise summary, and the detected concepts
+to the open session as soon as the page is checked. Page changes alone are not
+sent. Page summaries are kept in the session record, not shown as chat messages.
+The raw page image and extracted text are sent to Codex for that request; Study
+Room keeps the resulting summary and page metadata rather than a local copy of
+the page image.
+If the page contains an actual book exercise, the Coach presents it in the
+conversation and records its printed identifier.
 
-The timer counts active study time and can be paused. It records confirmed
-session data: topic, reference, start/end page or video time, concepts, exercises
-and outcomes, and assessment grade notes. The coach cannot guess what you read
-or whether an exercise was solved; confirm those details in the finish form.
+The timer counts active study time and can be paused. A PDF lesson requires at
+least one page marked as read before **Finish & log** is available. Finishing
+automatically saves the checked pages, their summaries and concepts, book
+exercises, and exercises requested in the Coach conversation. The session
+Markdown log is updated as pages are recorded and finalized when the session
+ends. The visible Coach conversation is saved separately with the session;
+internal page-capture instructions and summaries are not added to the chat.
 
 ## Dashboard and records
 
@@ -58,8 +66,9 @@ The current version does not launch or enforce that ten-part sequence as one
 automatic two-hour exam.
 
 The local SQLite database at `records/study.sqlite3` is the structured source
-for sessions, chat history, progress, and dashboard totals. The app also writes
-one readable Markdown export per finished session under `records/sessions/` and
+for sessions, page summaries, chat history, progress, and dashboard totals. The
+app writes or updates a readable Markdown export for each session under
+`records/sessions/` as pages are confirmed and when the session finishes, and
 regenerates a weekly summary under `records/weekly/`. Existing session exports
 without the app's generated marker are preserved; the app writes a separate
 dashboard summary rather than overwriting them.
@@ -67,19 +76,31 @@ dashboard summary rather than overwriting them.
 Open **Study records** on the dashboard to browse session logs, Study Coach
 conversations, and weekly summaries. Tabs separate the record types; session
 logs and conversations can be filtered by topic and date range, and long lists
-are paginated. Session exports show both the start and finish dates if a session
-spans more than one day.
+are paginated. In a session log, **Show page summaries** opens page summaries
+and up to three key concepts per page separately from the session details.
+Session exports show both the start and finish dates if a session spans more
+than one day.
 
-## Manually clear session history and chat
+## Clear study records
 
-Stop Study Room with `Ctrl+C` in the terminal running `./study` before editing
-the database. From `~/learn`, make a full backup of the records directory:
+To clear the study history from the portal, open **Study records**, select
+**Clear study records**, review the summary, and confirm. The action removes
+all saved sessions and their Coach conversations and exercise results, along with
+Study Room generated session logs and weekly summaries. It keeps saved
+PDF/video resume positions and manually written Markdown files. The app blocks
+the action while a session is active or paused; resume and finish that session
+first.
+
+For a manual database cleanup, first stop Study Room with `Ctrl+C` in the
+terminal running `./study`. From `~/learn`, make a full backup of the records
+directory:
 
 ```bash
 cp -a records "../learn-records-backup-$(date +%Y%m%d-%H%M%S)"
 ```
 
-Open the SQLite database:
+The `sqlite3` command-line program is optional and may need to be installed
+separately. Open the SQLite database with:
 
 ```bash
 sqlite3 records/study.sqlite3
@@ -100,7 +121,8 @@ COMMIT;
 ```
 
 With foreign keys enabled, deleting sessions also deletes their related chat
-messages and exercise results.
+messages and exercise results. This manual SQL procedure does not delete the
+Markdown exports described below.
 
 Markdown session exports and weekly summaries are files outside SQLite, so they
 remain in the Study records reader after the database is cleared. To remove
@@ -113,9 +135,8 @@ rg -l "Generated by the local Study Dashboard" records/sessions records/weekly
 
 This process preserves `records/progress.json`, which stores the current PDF
 and video resume cursors. The SQLite database is the structured source for
-dashboard totals and Coach chat history. Existing C examples, Python algorithms
-exercises, Linux notes, calculus environment, and `power_shell/` are not moved
-or changed.
+dashboard totals and Coach chat history. Topic folders under `topics/` are
+separate from records and are not changed by the clear action.
 
 ## Codex tutor, sign-in, skills, and agents
 
@@ -153,18 +174,26 @@ the saved playback position.
 
 | Topic | Reference | Workspace link or resource |
 |---|---|---|
-| Linux | Linux Bible (Blum) | `linux/blum-linux-bible/blum-linux-bible.pdf` |
-| Calculus | Stewart | `calculus/stewart/stewart.pdf` |
-| Electronics | Sedra/Smith | `electronics/sedra/sedra.pdf` |
-| Algebra | Grossman | `algebra/grossman/grossman.pdf` |
-| Networking | Kurose | `networking/kurose/kurose.pdf` |
-| Python | Fluent Python | `python/fluent-python/fluent-python.pdf` |
-| Go | O'Reilly Go | `go/go-o-reilly/go-o-reilly.pdf` |
-| C | Deitel C, 4th edition | `c/deitel4/deitel-4th.pdf` |
-| Algorithms | Grokking Algorithms | `algorithms/grokking-algorithms/grokking-algorithms.pdf` |
+| Linux | Linux Bible (Blum) | `topics/linux/blum-linux-bible/blum-linux-bible.pdf` |
+| Calculus | Stewart | `topics/calculus/stewart/stewart.pdf` |
+| Electronics | Sedra/Smith | `topics/electronics/sedra/sedra.pdf` |
+| Algebra | Grossman | `topics/algebra/grossman/grossman.pdf` |
+| Networking | Kurose | `topics/networking/kurose/kurose.pdf` |
+| Python | Fluent Python | `topics/python/fluent-python/fluent-python.pdf` |
+| Go | O'Reilly Go | `topics/go/go-o-reilly/go-o-reilly.pdf` |
+| C | Deitel C, 4th edition | `topics/c/deitel4/deitel-4th.pdf` |
+| Algorithms | Grokking Algorithms | `topics/algorithms/grokking-algorithms/grokking-algorithms.pdf` |
 | 3D modeling | FreeCAD robotic-arm walkthrough | [YouTube tutorial](https://www.youtube.com/watch?v=41OdocnsyXE) |
 | 3D modeling | Blender robotic-arm rigging | [YouTube tutorial](https://www.youtube.com/watch?v=QqOShvk4Ne8) |
 
 The linked OneDrive source paths remain recorded in `records/references.json`.
 The selected book is currently one reference per book topic; new reference
 books can be added later without changing the dashboard design.
+
+## Topic folders
+
+All local notes, exercises, environments, and linked books are organized in
+`topics/<topic>/`. To add a topic, create its folder under `topics/` and add the
+topic and references to `config/study-plan.json`; book paths in that file are
+relative to the project root, so they start with `topics/<topic>/`. Video-only
+topics can also have a folder for their local notes and project files.

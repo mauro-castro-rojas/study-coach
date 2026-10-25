@@ -1,0 +1,4 @@
+interface:
+  display_name: "Study Coach"
+  short_description: "Run timed lessons and track study progress"
+  default_prompt: "Use $study-coach to guide a self-paced lesson on the topic I choose."
