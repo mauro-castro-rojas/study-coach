@@ -31,13 +31,6 @@ def open_browser(url: str) -> bool:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "action",
-        nargs="?",
-        choices=("dashboard", "routine", "assessment"),
-        default="dashboard",
-        help="routine/assessment are legacy Windows-task aliases; lessons now start from the dashboard",
-    )
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--no-browser", action="store_true", help="start the local server without opening a browser")
     args = parser.parse_args()

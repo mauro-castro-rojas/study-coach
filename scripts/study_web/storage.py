@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sqlite3
 import uuid
@@ -34,10 +33,6 @@ class StudyStore:
             db.execute("PRAGMA journal_mode = WAL")
             db.executescript(
                 """
-                CREATE TABLE IF NOT EXISTS metadata (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL
-                );
                 CREATE TABLE IF NOT EXISTS sessions (
                     id TEXT PRIMARY KEY,
                     topic_id TEXT NOT NULL,
@@ -58,7 +53,6 @@ class StudyStore:
                     score REAL,
                     grade_notes TEXT NOT NULL DEFAULT '',
                     codex_thread_id TEXT,
-                    legacy INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS exercises (
@@ -84,13 +78,7 @@ class StudyStore:
                     ON messages(session_id, id);
                 """
             )
-            session_columns = {row["name"] for row in db.execute("PRAGMA table_info(sessions)")}
-            if "sound_on_target" not in session_columns:
-                db.execute(
-                    "ALTER TABLE sessions ADD COLUMN sound_on_target INTEGER NOT NULL DEFAULT 0"
-                )
         self._recover_open_sessions()
-        self._import_legacy_events()
 
     def _now_utc(self) -> datetime:
         return datetime.now(timezone.utc)
@@ -129,52 +117,6 @@ class StudyStore:
                     reference["kind"],
                 )
         return output
-
-    def _import_legacy_events(self) -> None:
-        legacy_path = self.root / "records" / "runtime" / "timer-events.jsonl"
-        with self._connect() as db:
-            if db.execute(
-                "SELECT 1 FROM metadata WHERE key='legacy_timer_import_v1'"
-            ).fetchone():
-                return
-            if legacy_path.exists():
-                for line in legacy_path.read_text(encoding="utf-8").splitlines():
-                    try:
-                        event = json.loads(line)
-                        started = datetime.fromisoformat(event["started_at"])
-                        ended = datetime.fromisoformat(event["ended_at"])
-                        topic_id = str(event["subject"])
-                        reference_id = event.get("resource") or topic_id
-                        if reference_id not in self._references():
-                            choices = self.plan["topics"].get(topic_id, {}).get("references", [])
-                            reference_id = choices[0]["id"] if choices else "legacy"
-                        duration = max(0, int((ended - started).total_seconds()))
-                        fingerprint = hashlib.sha256(line.encode("utf-8")).hexdigest()[:20]
-                        session_id = f"legacy-{fingerprint}"
-                        db.execute(
-                            """INSERT OR IGNORE INTO sessions
-                               (id, topic_id, reference_id, mode, status, started_at,
-                                ended_at, elapsed_seconds, planned_seconds, start_position,
-                                end_position, concepts, legacy, created_at)
-                               VALUES (?, ?, ?, 'legacy', ?, ?, ?, ?, NULL, '', '', '', 1, ?)""",
-                            (
-                                session_id,
-                                topic_id,
-                                reference_id,
-                                "completed" if event.get("status") == "completed" else "interrupted",
-                                started.isoformat(timespec="seconds"),
-                                ended.isoformat(timespec="seconds"),
-                                duration,
-                                self._now_text(),
-                            ),
-                        )
-                    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-                        continue
-            db.execute(
-                "INSERT INTO metadata(key, value) VALUES('legacy_timer_import_v1', ?) "
-                "ON CONFLICT(key) DO NOTHING",
-                (self._now_text(),),
-            )
 
     def progress(self) -> dict[str, Any]:
         if self.progress_path.exists():
@@ -440,7 +382,14 @@ class StudyStore:
 
     def session(self, session_id: str) -> dict[str, Any]:
         with self._connect() as db:
-            row = db.execute("SELECT * FROM sessions WHERE id=?", (session_id,)).fetchone()
+            row = db.execute(
+                """SELECT id, topic_id, reference_id, mode, status, started_at, ended_at,
+                          active_since, heartbeat_at, elapsed_seconds, setup_seconds,
+                          planned_seconds, sound_on_target, start_position, end_position,
+                          concepts, score, grade_notes, codex_thread_id, created_at
+                   FROM sessions WHERE id=?""",
+                (session_id,),
+            ).fetchone()
             if not row:
                 raise ValueError("Session not found.")
             result = dict(row)
@@ -620,7 +569,9 @@ class StudyStore:
         limit: int = 30,
     ) -> list[dict[str, Any]]:
         with self._connect() as db:
-            rows = db.execute("SELECT * FROM sessions ORDER BY started_at DESC").fetchall()
+            rows = db.execute(
+                "SELECT id, started_at FROM sessions ORDER BY started_at DESC"
+            ).fetchall()
             exercise_rows = db.execute(
                 "SELECT session_id, exercise_id, description, outcome, notes FROM exercises "
                 "ORDER BY id"

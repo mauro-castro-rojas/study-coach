@@ -286,8 +286,8 @@ function renderHistory() {
     const status = document.createElement("span");
     status.className = "history-status";
     const pill = document.createElement("span");
-    pill.className = `status-pill ${item.status === "paused" ? "paused" : ""} ${item.legacy ? "legacy" : ""}`;
-    pill.textContent = item.legacy ? "Imported timer" : item.mode === "assessment" ? (item.score == null ? item.status : `${item.score}/10`) : item.status;
+    pill.className = `status-pill ${item.status === "paused" ? "paused" : ""}`;
+    pill.textContent = item.mode === "assessment" ? (item.score == null ? item.status : `${item.score}/10`) : item.status;
     status.append(pill);
     if (["active", "paused"].includes(item.status)) {
       const continueButton = document.createElement("button");

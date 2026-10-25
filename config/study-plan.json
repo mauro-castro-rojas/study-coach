@@ -1,0 +1,99 @@
+{
+  "timezone": "America/Bogota",
+  "weekly_assessment": {
+    "minutes_per_topic": 12,
+    "topics": [
+      "linux", "calculus", "electronics", "algebra", "networking",
+      "python", "go", "c", "algorithms", "3d-modeling"
+    ]
+  },
+  "topics": {
+    "linux": {
+      "title": "Linux",
+      "references": [{
+        "id": "blum-linux-bible", "title": "Linux Bible (Blum)",
+        "kind": "book", "path": "linux/blum-linux-bible/blum-linux-bible.pdf",
+        "default_minutes": 15
+      }]
+    },
+    "calculus": {
+      "title": "Calculus",
+      "references": [{
+        "id": "stewart", "title": "Calculus (Stewart)",
+        "kind": "book", "path": "calculus/stewart/stewart.pdf",
+        "default_minutes": 15
+      }]
+    },
+    "electronics": {
+      "title": "Electronics",
+      "references": [{
+        "id": "sedra", "title": "Microelectronic Circuits (Sedra/Smith)",
+        "kind": "book", "path": "electronics/sedra/sedra.pdf",
+        "default_minutes": 15
+      }]
+    },
+    "algebra": {
+      "title": "Algebra",
+      "references": [{
+        "id": "grossman", "title": "Algebra (Grossman)",
+        "kind": "book", "path": "algebra/grossman/grossman.pdf",
+        "default_minutes": 15
+      }]
+    },
+    "networking": {
+      "title": "Networking",
+      "references": [{
+        "id": "kurose", "title": "Computer Networking (Kurose)",
+        "kind": "book", "path": "networking/kurose/kurose.pdf",
+        "default_minutes": 15
+      }]
+    },
+    "python": {
+      "title": "Python",
+      "references": [{
+        "id": "fluent-python", "title": "Fluent Python",
+        "kind": "book", "path": "python/fluent-python/fluent-python.pdf",
+        "default_minutes": 15
+      }]
+    },
+    "go": {
+      "title": "Go",
+      "references": [{
+        "id": "go-o-reilly", "title": "Go (O'Reilly)",
+        "kind": "book", "path": "go/go-o-reilly/go-o-reilly.pdf",
+        "default_minutes": 15
+      }]
+    },
+    "c": {
+      "title": "C",
+      "references": [{
+        "id": "deitel4", "title": "Deitel C, 4th edition",
+        "kind": "book", "path": "c/deitel4/deitel-4th.pdf",
+        "default_minutes": 15
+      }]
+    },
+    "algorithms": {
+      "title": "Algorithms",
+      "references": [{
+        "id": "grokking-algorithms", "title": "Grokking Algorithms",
+        "kind": "book", "path": "algorithms/grokking-algorithms/grokking-algorithms.pdf",
+        "default_minutes": 15
+      }]
+    },
+    "3d-modeling": {
+      "title": "3D modeling",
+      "references": [
+        {
+          "id": "freecad-robot-arm", "title": "Complete FreeCAD Tutorial: Robotic Arm",
+          "kind": "video", "url": "https://www.youtube.com/watch?v=41OdocnsyXE",
+          "default_minutes": 40
+        },
+        {
+          "id": "blender-robot-arm", "title": "Rigging & Animating a Robotic Arm — Blender 4.5",
+          "kind": "video", "url": "https://www.youtube.com/watch?v=QqOShvk4Ne8",
+          "default_minutes": 30
+        }
+      ]
+    }
+  }
+}
