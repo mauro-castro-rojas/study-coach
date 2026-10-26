@@ -25,3 +25,7 @@ __pycache__/
 /records/runtime/
 /records/sessions/
 /records/weekly/
+
+# Topic materials are learner-specific; topics/README.md documents the layout.
+/topics/*
+!/topics/README.md
