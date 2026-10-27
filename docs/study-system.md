@@ -157,6 +157,17 @@ as experimental; this is a personal app bound to loopback, not a hosted service.
 [Codex app-server](https://learn.chatgpt.com/docs/app-server) ·
 [ChatGPT-plan usage with app-server](https://developers.openai.com/siwc/token-sharing-open-source/codex-app-server)
 
+The Study Coach panel lets the learner choose an available text-and-image model
+and one of that model's supported reasoning efforts. The choice applies to the
+next chat response and PDF page read and is remembered in that browser.
+
+For temporary verification, each accepted Coach turn prints its thread ID, turn
+ID, requested model, and reasoning effort in the terminal running `./study`.
+This confirms which settings the app sent and that Codex accepted the turn
+start; it does not expose prompt text or independently verify the provider's
+internal serving details. To disable this diagnostic, comment out the `print(`
+call marked `TEMP` in `scripts/study_web/server.py` inside `_stream_turn`.
+
 The existing `study-coach` skill is used for each new tutor thread. It contains
 the teaching style, page-reading guidance, and test rubric; the app supplies
 the selected topic, reference, duration, and starting position. `AGENTS.md`

@@ -97,6 +97,11 @@
             <div class="position-card"><div><span class="position-icon">⌖</span><span><small>STARTING POINT</small><strong id="sessionStartPosition">—</strong></span></div></div>
             <section class="coach-panel" aria-label="Study Coach conversation">
               <div class="coach-header"><div class="coach-avatar">✳</div><div><strong>Study Coach</strong><small id="coachStatus">Ready to learn with you</small></div><span class="coach-header-spacer"></span><span class="online-indicator" title="Local Codex connection"></span></div>
+              <div class="coach-settings" aria-label="Study Coach model settings">
+                <label>Model<select id="coachModelSelect" aria-label="Study Coach model" disabled><option>Connect ChatGPT to load models</option></select></label>
+                <label>Reasoning<select id="coachEffortSelect" aria-label="Reasoning effort" disabled><option>—</option></select></label>
+                <small id="coachSettingsHint" role="status" aria-live="polite">Connect ChatGPT to choose a model.</small>
+              </div>
               <div id="chatMessages" class="chat-messages" aria-live="polite"><div class="empty-chat"><span>✳</span><p>Your lesson will begin here.</p><small>Ask questions, work through examples, and share your exercise results.</small></div></div>
               <form id="chatForm" class="chat-composer"><textarea id="chatInput" rows="2" placeholder="Ask a question or share your thinking…" aria-label="Message your Study Coach" required></textarea><div class="composer-footer"><span>Enter to send · Shift+Enter for a new line</span><button id="sendButton" class="send-button" type="submit" aria-label="Send message">↑</button></div></form>
             </section>

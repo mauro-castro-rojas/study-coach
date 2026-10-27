@@ -17,6 +17,11 @@ const appState = {
   targetAlertToastShown: false,
   targetSoundPlayedForSession: null,
   audioContext: null,
+  coachModels: [],
+  coachModel: "",
+  coachEffort: "",
+  coachModelsLoading: false,
+  coachModelsLoaded: false,
   records: [],
   recordsKind: "sessions",
   recordsPage: 1,
@@ -25,6 +30,7 @@ const appState = {
 };
 
 const $ = (id) => document.getElementById(id);
+const COACH_PREFERENCES_KEY = "study-room-coach-preferences";
 const api = async (path, options = {}) => {
   const response = await fetch(path, {
     ...options,
@@ -34,6 +40,75 @@ const api = async (path, options = {}) => {
   if (!response.ok) throw new Error(body.error || `Request failed (${response.status}).`);
   return body;
 };
+
+function readCoachPreferences() {
+  try {
+    return JSON.parse(localStorage.getItem(COACH_PREFERENCES_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function saveCoachPreferences() {
+  try {
+    localStorage.setItem(COACH_PREFERENCES_KEY, JSON.stringify({
+      model: appState.coachModel,
+      effort: appState.coachEffort,
+    }));
+  } catch {
+    // The current choices still apply for this page even if browser storage is unavailable.
+  }
+}
+
+function populateCoachEfforts(model, preferredEffort = "") {
+  const select = $("coachEffortSelect");
+  const efforts = model.efforts || [];
+  select.replaceChildren(...efforts.map((effort) => {
+    const option = new Option(effort.value, effort.value);
+    option.title = effort.description || effort.value;
+    return option;
+  }));
+  const validValues = efforts.map((effort) => effort.value);
+  appState.coachEffort = validValues.includes(preferredEffort)
+    ? preferredEffort
+    : validValues.includes(model.default_effort) ? model.default_effort : (validValues[0] || "");
+  select.value = appState.coachEffort;
+  select.disabled = !appState.coachEffort;
+}
+
+async function loadCoachModels() {
+  if (appState.coachModelsLoaded || appState.coachModelsLoading) return;
+  appState.coachModelsLoading = true;
+  const hint = $("coachSettingsHint");
+  hint.textContent = "Loading models available to your ChatGPT account…";
+  try {
+    const data = await api("/api/codex/models");
+    appState.coachModels = data.models || [];
+    if (!appState.coachModels.length) throw new Error("No models supporting chat and PDF pages are available.");
+    const saved = readCoachPreferences();
+    const selected = appState.coachModels.find((model) => model.model === saved.model)
+      || appState.coachModels.find((model) => model.is_default)
+      || appState.coachModels[0];
+    appState.coachModel = selected.model;
+    const modelSelect = $("coachModelSelect");
+    modelSelect.replaceChildren(...appState.coachModels.map((model) => {
+      const option = new Option(model.display_name, model.model);
+      option.title = model.description || model.display_name;
+      return option;
+    }));
+    modelSelect.value = appState.coachModel;
+    modelSelect.disabled = false;
+    const preferredEffort = saved.model === appState.coachModel ? saved.effort : "";
+    populateCoachEfforts(selected, preferredEffort);
+    hint.textContent = "Changes apply to your next Coach reply and PDF page read.";
+    appState.coachModelsLoaded = true;
+    saveCoachPreferences();
+  } catch (error) {
+    hint.textContent = `Could not load Coach models: ${error.message}`;
+  } finally {
+    appState.coachModelsLoading = false;
+  }
+}
 
 const icons = {
   linux: "⌘", calculus: "∫", electronics: "ϟ", algebra: "x²", networking: "⌁",
@@ -201,6 +276,7 @@ async function loadAuth() {
       button.classList.add("auth-connected");
       button.disabled = false;
       button.title = "Signed in with ChatGPT; Codex plan usage applies.";
+      loadCoachModels();
       return true;
     }
     button.textContent = "Connect ChatGPT";
@@ -856,7 +932,12 @@ async function streamChat(sessionId, text, initial = false, imageDataUrl = null,
     const response = await fetch(`/api/session/${sessionId}/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: text, ...(imageDataUrl ? { image_data_url: imageDataUrl, page_number: pageNumber } : {}) }),
+      body: JSON.stringify({
+        message: text,
+        model: appState.coachModel,
+        effort: appState.coachEffort,
+        ...(imageDataUrl ? { image_data_url: imageDataUrl, page_number: pageNumber } : {}),
+      }),
     });
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));
@@ -941,7 +1022,13 @@ async function markCurrentPageRead() {
     const response = await fetch(`/api/session/${appState.session.id}/read-page`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ page_number: pageNumber, page_text: pageText, image_data_url: imageDataUrl }),
+      body: JSON.stringify({
+        page_number: pageNumber,
+        page_text: pageText,
+        image_data_url: imageDataUrl,
+        model: appState.coachModel,
+        effort: appState.coachEffort,
+      }),
     });
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));
@@ -1297,6 +1384,17 @@ function wireEvents() {
   $("previewPdfFrame").addEventListener("load", () => bindPdfViewer("previewPdfFrame"));
   $("readPageWithCoach").addEventListener("change", (event) => {
     if (event.currentTarget.checked) markCurrentPageRead();
+  });
+  $("coachModelSelect").addEventListener("change", () => {
+    const model = appState.coachModels.find((item) => item.model === $("coachModelSelect").value);
+    if (!model) return;
+    appState.coachModel = model.model;
+    populateCoachEfforts(model);
+    saveCoachPreferences();
+  });
+  $("coachEffortSelect").addEventListener("change", () => {
+    appState.coachEffort = $("coachEffortSelect").value;
+    saveCoachPreferences();
   });
   $("topicSelect").addEventListener("change", () => { populateReferences(); syncModeFields(); });
   $("referenceSelect").addEventListener("change", () => { populateReferences($("referenceSelect").value); syncModeFields(); });

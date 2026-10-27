@@ -7,6 +7,7 @@ import queue
 import shutil
 import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,9 @@ class CodexAppServer:
         self._listeners: dict[str, set[queue.Queue[dict[str, Any]]]] = {}
         self._resumed_threads: set[str] = set()
         self._last_error = ""
+        self._models_cache: list[dict[str, Any]] = []
+        self._models_cache_at = 0.0
+        self._models_lock = threading.Lock()
         threading.Thread(target=self._read_stdout, daemon=True).start()
         threading.Thread(target=self._read_stderr, daemon=True).start()
         try:
@@ -152,7 +156,26 @@ class CodexAppServer:
         with self._state_lock:
             self._listeners.get(thread_id, set()).discard(listener)
 
-    def ensure_thread(self, thread_id: str | None) -> str:
+    def model_catalog(self) -> list[dict[str, Any]]:
+        with self._models_lock:
+            if self._models_cache and time.monotonic() - self._models_cache_at < 600:
+                return self._models_cache
+            models: list[dict[str, Any]] = []
+            cursor: str | None = None
+            for _ in range(10):
+                params: dict[str, Any] = {"includeHidden": False, "limit": 100}
+                if cursor:
+                    params["cursor"] = cursor
+                result = self.request("model/list", params)
+                models.extend(item for item in result.get("data", []) if isinstance(item, dict))
+                cursor = result.get("nextCursor")
+                if not cursor:
+                    break
+            self._models_cache = models
+            self._models_cache_at = time.monotonic()
+            return models
+
+    def ensure_thread(self, thread_id: str | None, model: str | None = None) -> str:
         if thread_id and thread_id not in self._resumed_threads:
             try:
                 self.request("thread/resume", {"threadId": thread_id})
@@ -168,6 +191,7 @@ class CodexAppServer:
                 "cwd": str(self.root),
                 "serviceName": "learn-study-dashboard",
                 "sandbox": "read-only",
+                **({"model": model} if model else {}),
             },
         )
         thread = result.get("thread", {})
@@ -183,6 +207,8 @@ class CodexAppServer:
         text: str,
         include_skill: bool,
         image_url: str | None = None,
+        model: str | None = None,
+        effort: str | None = None,
     ) -> tuple[str, queue.Queue[dict[str, Any]]]:
         listener = self.subscribe(thread_id)
         items: list[dict[str, Any]] = [{"type": "text", "text": text}]
@@ -198,7 +224,12 @@ class CodexAppServer:
                 }
             )
         try:
-            result = self.request("turn/start", {"threadId": thread_id, "input": items})
+            params: dict[str, Any] = {"threadId": thread_id, "input": items}
+            if model:
+                params["model"] = model
+            if effort:
+                params["effort"] = effort
+            result = self.request("turn/start", params)
         except Exception:
             self.unsubscribe(thread_id, listener)
             raise
