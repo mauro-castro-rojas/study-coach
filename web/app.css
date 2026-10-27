@@ -193,6 +193,87 @@ button:disabled {
   font-weight: 500;
 }
 
+.study-mode-setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin: 0 0 28px;
+  padding: 16px 19px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: #fff;
+}
+
+.study-mode-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.study-mode-copy strong,
+.study-mode-toggle strong {
+  color: #34483a;
+  font-size: 13px;
+}
+
+.study-mode-copy small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.study-mode-toggle {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  cursor: pointer;
+}
+
+.study-mode-toggle input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.study-mode-switch {
+  position: relative;
+  flex: 0 0 42px;
+  width: 42px;
+  height: 24px;
+  border: 1px solid #b8c4ba;
+  border-radius: 999px;
+  background: #e8ece8;
+  transition: background .18s,border-color .18s;
+}
+
+.study-mode-switch::after {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px #1d332626;
+  content: "";
+  transition: transform .18s;
+}
+
+.study-mode-toggle input:checked + .study-mode-switch {
+  border-color: var(--green);
+  background: var(--green);
+}
+
+.study-mode-toggle input:checked + .study-mode-switch::after {
+  transform: translateX(18px);
+}
+
+.study-mode-toggle input:focus-visible + .study-mode-switch {
+  outline: 3px solid #b9d0be;
+  outline-offset: 3px;
+}
+
 .intro {
   font-size: 15px;
   line-height: 1.7;
@@ -1037,6 +1118,17 @@ button:disabled {
     gap: 22px;
   }
 
+  .study-mode-setting {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 13px;
+    padding: 14px;
+  }
+
+  .study-mode-toggle {
+    width: 100%;
+  }
+
   .quote-card {
     min-height: 170px;
     padding: 25px 27px;
@@ -1369,6 +1461,10 @@ button:disabled {
   min-height: 390px;
   max-height: none;
   flex: 1;
+}
+
+.manual-session .study-panel .coach-panel {
+  display: none;
 }
 
 .panel-hidden {

@@ -17,6 +17,7 @@ const appState = {
   pageSummaryOriginal: "",
   pageSummaryEditingPage: null,
   pageReadPending: false,
+  manualMode: false,
   toastHandle: null,
   targetAlertSessionId: null,
   targetAlertDismissed: false,
@@ -289,7 +290,8 @@ function updatePageReadControl() {
   const recorded = appState.pageReads.some((item) => Number(item.viewer_page) === page);
   const loaded = Boolean(appState.pdfViewerApps.pdfFrame?.pdfDocument);
   control.checked = recorded;
-  control.disabled = appState.pageReadPending || !loaded || !page || recorded || $("sendButton").disabled;
+  const manualMode = appState.session?.coach_mode === "manual";
+  control.disabled = appState.pageReadPending || !loaded || !page || recorded || (!manualMode && $("sendButton").disabled);
   $("pageReadLabel").textContent = recorded ? "Page read" : "Mark as read";
   renderPageReadTracker();
   const requiresPage = appState.session?.reference_kind === "book" && appState.session?.mode !== "assessment";
@@ -311,7 +313,7 @@ function renderPageReadTracker() {
   list.replaceChildren(...pages.map((page) => {
     const item = document.createElement("li");
     item.textContent = `p. ${page.viewer_page}`;
-    item.title = `PDF viewer page ${page.viewer_page} was sent to the Study Coach`;
+    item.title = `PDF viewer page ${page.viewer_page} is marked as read`;
     return item;
   }));
 }
@@ -373,6 +375,29 @@ async function loadConfig() {
   $("libraryCount").textContent = `${appState.config.topics.length} topics · choose any time`;
   fillTopicSelect();
   renderLibrary();
+}
+
+function syncDashboardStudyMode() {
+  $("manualModeToggle").checked = appState.manualMode;
+}
+
+function setDashboardStudyMode(manualMode) {
+  appState.manualMode = Boolean(manualMode);
+  try {
+    localStorage.setItem("study-room-manual-mode", String(appState.manualMode));
+  } catch {
+    // The current choice still applies until this page is closed.
+  }
+  syncDashboardStudyMode();
+}
+
+function restoreDashboardStudyMode() {
+  try {
+    appState.manualMode = localStorage.getItem("study-room-manual-mode") === "true";
+  } catch {
+    appState.manualMode = false;
+  }
+  syncDashboardStudyMode();
 }
 
 async function loadDashboard() {
@@ -1157,7 +1182,8 @@ async function streamChat(sessionId, text, initial = false, imageDataUrl = null,
 
 async function markCurrentPageRead() {
   if (!appState.session || !appState.reference || appState.reference.kind !== "book") return;
-  if ($("sendButton").disabled || appState.pageReadPending) return;
+  const manualMode = appState.session.coach_mode === "manual";
+  if ((!manualMode && $("sendButton").disabled) || appState.pageReadPending) return;
   const viewer = appState.pdfViewerApps.pdfFrame;
   const pageNumber = Number(viewer?.pdfViewer?.currentPageNumber || 0);
   if (!viewer?.pdfDocument || !Number.isInteger(pageNumber) || pageNumber < 1) {
@@ -1173,6 +1199,19 @@ async function markCurrentPageRead() {
   updatePageReadControl();
   $("pageReadLabel").textContent = "Saving progress…";
   try {
+    if (manualMode) {
+      const result = await api(`/api/session/${appState.session.id}/mark-page`, {
+        method: "POST",
+        body: JSON.stringify({ page_number: pageNumber }),
+      });
+      const markedPage = result.page;
+      appState.pageReads.push(markedPage);
+      appState.session.page_reads = appState.pageReads;
+      updatePageReadControl();
+      toast(`p. ${markedPage.viewer_page} marked as read.`);
+      openPageSummaryDialog(markedPage.viewer_page);
+      return;
+    }
     const page = await viewer.pdfDocument.getPage(pageNumber);
     const textContent = await page.getTextContent();
     const pageText = textContent.items
@@ -1245,14 +1284,16 @@ async function markCurrentPageRead() {
     toast(error.message);
   } finally {
     appState.pageReadPending = false;
-    $("sendButton").disabled = false;
-    $("chatInput").disabled = false;
+    const stillManual = appState.session?.coach_mode === "manual";
+    $("sendButton").disabled = stillManual;
+    $("chatInput").disabled = stillManual;
     updatePageReadControl();
   }
 }
 
 function showSession(session, messages = []) {
   appState.session = session;
+  const manualMode = session.coach_mode === "manual";
   appState.pageReads = session.page_reads || [];
   renderPageReadTracker();
   appState.pageReadPending = false;
@@ -1265,6 +1306,7 @@ function showSession(session, messages = []) {
   $("timerCard").classList.remove("target-reached");
   $("targetAlert").classList.add("hidden");
   $("appShell").classList.add("session-expanded");
+  $("appShell").classList.toggle("manual-session", manualMode);
   appState.reference = appState.config.topics
     .find((topic) => topic.id === session.topic_id)?.references
     .find((reference) => reference.id === session.reference_id) || null;
@@ -1274,7 +1316,9 @@ function showSession(session, messages = []) {
   $("sessionTopicLabel").textContent = session.topic_title.toUpperCase();
   $("sessionTitle").textContent = session.topic_title;
   $("sessionReference").textContent = session.reference_title;
-  $("sessionModeBadge").textContent = session.mode === "assessment" ? "PRACTICE TEST" : "GUIDED STUDY";
+  $("sessionModeBadge").textContent = manualMode
+    ? (session.mode === "assessment" ? "MANUAL PRACTICE TEST" : "MANUAL STUDY")
+    : (session.mode === "assessment" ? "PRACTICE TEST" : "GUIDED STUDY");
   const hasPdf = session.reference_kind === "book" && session.mode !== "assessment";
   const needsReadPage = hasPdf && appState.pageReads.length === 0;
   const hasVideo = session.reference_kind === "video" && session.mode !== "assessment";
@@ -1311,8 +1355,9 @@ function showSession(session, messages = []) {
       : "<span>✳</span><p>Your lesson is ready.</p><small>Ask the Coach about the selected topic whenever you want help.</small>";
     $("chatMessages").append(empty);
   }
-  $("chatInput").disabled = false;
-  $("sendButton").disabled = false;
+  $("chatInput").disabled = manualMode;
+  $("sendButton").disabled = manualMode;
+  $("openCodexUsage").classList.toggle("hidden", manualMode);
   syncTimer(session);
   if (session.status === "paused") {
     $("pauseButton").textContent = "Resume";
@@ -1383,6 +1428,7 @@ async function beginSession(mode, startPosition) {
     planned_minutes: selectedMinutes(),
     start_position: startPosition,
     mode,
+    coach_mode: appState.manualMode ? "manual" : "coach",
     sound_on_target: selectedMinutes() !== "open" && $("soundReminder").checked,
   };
   let response;
@@ -1397,7 +1443,7 @@ async function beginSession(mode, startPosition) {
   $("setupDialog").close();
   $("positionDialog").close();
   showSession(response.session);
-  if (mode === "assessment") await streamChat(response.session.id, "", true);
+  if (mode === "assessment" && response.session.coach_mode !== "manual") await streamChat(response.session.id, "", true);
   await loadDashboard();
 }
 
@@ -1765,6 +1811,9 @@ function showDashboard() {
 }
 
 function wireEvents() {
+  $("manualModeToggle").addEventListener("change", (event) => {
+    setDashboardStudyMode(event.currentTarget.checked);
+  });
   $("addChapterRange").addEventListener("click", () => {
     addChapterRangeRow();
     saveChapterRangeDraft();
@@ -1975,6 +2024,7 @@ function wireEvents() {
 }
 
 async function main() {
+  restoreDashboardStudyMode();
   wireEvents();
   renderLocalClock();
   appState.localClockHandle = setInterval(renderLocalClock, 1000);

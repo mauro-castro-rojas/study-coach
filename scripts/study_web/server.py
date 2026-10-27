@@ -166,8 +166,10 @@ class StudyApplication:
         }
 
     def new_session(self, payload: dict[str, Any]) -> dict[str, Any]:
-        auth = self.auth_status()
-        if not auth["authenticated"]:
+        coach_mode = str(payload.get("coach_mode", "coach"))
+        if coach_mode not in {"coach", "manual"}:
+            raise ValueError("Choose Study Coach or manual mode.")
+        if coach_mode == "coach" and not self.auth_status()["authenticated"]:
             raise PermissionError("Connect ChatGPT before starting a tutor session.")
         topic_id = str(payload.get("topic_id", ""))
         reference_id = str(payload.get("reference_id", ""))
@@ -212,6 +214,7 @@ class StudyApplication:
             planned_seconds,
             start_position,
             mode=mode,
+            coach_mode=coach_mode,
             sound_on_target=bool(payload.get("sound_on_target", False)) and planned_seconds is not None,
         )
         return session
@@ -659,6 +662,27 @@ class StudyHandler(BaseHTTPRequestHandler):
             )
         elif action == "read-page":
             self._read_page(session_id, payload)
+        elif action == "mark-page":
+            session = self.app.store.session(session_id)
+            if session["coach_mode"] != "manual":
+                self._json(400, {"error": "Manual page marking is only available in manual mode."})
+                return
+            if session["status"] not in {"active", "paused"}:
+                self._json(400, {"error": "This session is already finished."})
+                return
+            if session["reference_kind"] != "book" or session["mode"] == "assessment":
+                self._json(400, {"error": "Page tracking is available during PDF lessons."})
+                return
+            try:
+                page_number = int(payload.get("page_number"))
+            except (TypeError, ValueError) as error:
+                raise ValueError("Could not identify the current PDF viewer page.") from error
+            if page_number < 1:
+                raise ValueError("PDF viewer page numbers must be positive.")
+            page, _created = self.app.store.save_page_read(
+                session_id, page_number, "", "", [], []
+            )
+            self._json(200, {"page": page})
         elif action == "page-summary":
             try:
                 viewer_page = int(payload.get("viewer_page"))
@@ -685,6 +709,9 @@ class StudyHandler(BaseHTTPRequestHandler):
         model: Any = None,
         effort: Any = None,
     ) -> None:
+        if self.app.store.session(session_id)["coach_mode"] == "manual":
+            self._json(400, {"error": "Study Coach chat is disabled for this manual session."})
+            return
         if not message.strip():
             self._json(400, {"error": "Enter a message for the coach."})
             return
@@ -714,6 +741,9 @@ class StudyHandler(BaseHTTPRequestHandler):
 
     def _read_page(self, session_id: str, payload: dict[str, Any]) -> None:
         session = self.app.store.session(session_id)
+        if session["coach_mode"] == "manual":
+            self._json(400, {"error": "Use manual page marking for this session."})
+            return
         if session["status"] not in {"active", "paused"}:
             self._json(400, {"error": "This session is already finished."})
             return

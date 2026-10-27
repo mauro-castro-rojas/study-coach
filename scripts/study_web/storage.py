@@ -39,6 +39,7 @@ class StudyStore:
                     topic_id TEXT NOT NULL,
                     reference_id TEXT NOT NULL,
                     mode TEXT NOT NULL DEFAULT 'lesson',
+                    coach_mode TEXT NOT NULL DEFAULT 'coach',
                     status TEXT NOT NULL,
                     started_at TEXT NOT NULL,
                     ended_at TEXT,
@@ -94,6 +95,8 @@ class StudyStore:
             }
             if "page_ranges" not in session_columns:
                 db.execute("ALTER TABLE sessions ADD COLUMN page_ranges TEXT NOT NULL DEFAULT '[]'")
+            if "coach_mode" not in session_columns:
+                db.execute("ALTER TABLE sessions ADD COLUMN coach_mode TEXT NOT NULL DEFAULT 'coach'")
         self._recover_open_sessions()
 
     def _now_utc(self) -> datetime:
@@ -196,6 +199,7 @@ class StudyStore:
         planned_seconds: int | None,
         start_position: str,
         mode: str = "lesson",
+        coach_mode: str = "coach",
         setup_seconds: int = 0,
         sound_on_target: bool = False,
     ) -> dict[str, Any]:
@@ -204,6 +208,8 @@ class StudyStore:
             raise ValueError("That reference does not belong to the selected topic.")
         if mode not in {"lesson", "assessment"}:
             raise ValueError("Unknown session mode.")
+        if coach_mode not in {"coach", "manual"}:
+            raise ValueError("Unknown study mode.")
         with self._connect() as db:
             if db.execute(
                 "SELECT 1 FROM sessions WHERE status IN ('active','paused') LIMIT 1"
@@ -213,15 +219,16 @@ class StudyStore:
             now = self._now_text()
             db.execute(
                 """INSERT INTO sessions
-                   (id, topic_id, reference_id, mode, status, started_at, active_since,
+                   (id, topic_id, reference_id, mode, coach_mode, status, started_at, active_since,
                     heartbeat_at, elapsed_seconds, setup_seconds, planned_seconds, sound_on_target,
                     start_position, created_at)
-                   VALUES (?, ?, ?, ?, 'active', ?, ?, ?, 0, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, 0, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     topic_id,
                     reference_id,
                     mode,
+                    coach_mode,
                     now,
                     now,
                     now,
@@ -539,7 +546,7 @@ class StudyStore:
     def session(self, session_id: str) -> dict[str, Any]:
         with self._connect() as db:
             row = db.execute(
-                """SELECT id, topic_id, reference_id, mode, status, started_at, ended_at,
+                """SELECT id, topic_id, reference_id, mode, coach_mode, status, started_at, ended_at,
                           active_since, heartbeat_at, elapsed_seconds, setup_seconds,
                           planned_seconds, sound_on_target, start_position, end_position,
                           concepts, score, grade_notes, page_ranges, codex_thread_id, created_at

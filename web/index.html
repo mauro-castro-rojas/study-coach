@@ -43,6 +43,11 @@
           </aside>
         </section>
 
+        <section class="study-mode-setting" aria-label="Study mode for new sessions">
+          <div class="study-mode-copy"><strong>Study mode for new sessions</strong><small>Choose whether new sessions use the Study Coach or manual notes. An open session keeps its original mode.</small></div>
+          <label class="study-mode-toggle"><input id="manualModeToggle" type="checkbox" role="switch" aria-label="Manual mode for new sessions"><span class="study-mode-switch" aria-hidden="true"></span><strong>Manual mode</strong></label>
+        </section>
+
         <section class="stats-grid" aria-label="Study totals">
           <article class="stat-card"><span class="stat-label">TIME INVESTED</span><strong id="totalTime">—</strong><small>across all topics</small></article>
           <article class="stat-card"><span class="stat-label">LESSONS LOGGED</span><strong id="totalSessions">—</strong><small>completed or in progress</small></article>
@@ -82,8 +87,8 @@
               </div>
             </div>
             <div id="pdfReader" class="pdf-reader hidden">
-              <section id="pageReadTracker" class="page-read-tracker hidden" aria-live="polite" aria-label="Pages sent to the Study Coach">
-                <strong id="pageReadTrackerTitle">Pages sent to Coach</strong>
+              <section id="pageReadTracker" class="page-read-tracker hidden" aria-live="polite" aria-label="Pages marked as read">
+                <strong id="pageReadTrackerTitle">Pages marked as read</strong>
                 <span id="pageReadTrackerCount" class="page-read-tracker-count"></span>
                 <ul id="pageReadTrackerList" class="page-read-tracker-list"></ul>
               </section>
