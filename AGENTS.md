@@ -32,3 +32,6 @@ time or topic rotation.
   is missing or an implementation choice would change the requested behavior, 
   ask me before proceeding. Make reasonable assumptions only for routine 
   details that don’t affect functionality, and state them clearly.
+- Keep CSS files human-readable: use one selector per rule, put each declaration
+  on its own line, indent nested at-rules consistently, and separate rules with
+  blank lines. Do not minify CSS or combine multiple rules on one line.
