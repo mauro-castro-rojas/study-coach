@@ -75,7 +75,6 @@ class CodexAppServer:
                 if pending:
                     pending.put(message)
                 continue
-            method = message.get("method")
             params = message.get("params", {})
             thread_id = params.get("threadId") or params.get("thread", {}).get("id")
             if thread_id:

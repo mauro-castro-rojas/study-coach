@@ -550,8 +550,12 @@ class StudyHandler(BaseHTTPRequestHandler):
         if session["reference_kind"] != "book" or session["mode"] == "assessment":
             self._json(400, {"error": "Page tracking is available during PDF lessons."})
             return
+        raw_page_number = payload.get("page_number")
+        if raw_page_number is None:
+            self._json(400, {"error": "Could not identify the current PDF viewer page."})
+            return
         try:
-            page_number = int(payload.get("page_number"))
+            page_number = int(raw_page_number)
         except (TypeError, ValueError):
             self._json(400, {"error": "Could not identify the current PDF viewer page."})
             return
