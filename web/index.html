@@ -224,16 +224,8 @@
         <section class="finish-pages-card">
           <h3>Pages scanned by the Coach</h3>
           <ul id="finishReadPageList" class="finish-read-page-list"></ul>
-        </section>
-        <section class="page-summary-editor">
-          <div class="finish-section-heading"><div><h3>Review page summaries</h3><p>Edit the Markdown and preview how it will appear in Study records.</p></div></div>
-          <label class="summary-page-picker">Page to review<select id="summaryPageSelect" aria-label="Choose a scanned PDF page summary"></select></label>
-          <div class="summary-editor-tabs" role="tablist" aria-label="Summary editor view">
-            <button id="summaryEditTab" class="summary-editor-tab selected" type="button" role="tab" aria-selected="true">Markdown</button>
-            <button id="summaryPreviewTab" class="summary-editor-tab" type="button" role="tab" aria-selected="false">Preview</button>
-          </div>
-          <textarea id="pageSummaryEditor" class="page-summary-source" rows="10" aria-label="Edit page summary as Markdown"></textarea>
-          <div id="pageSummaryPreview" class="markdown-document page-summary-preview hidden" role="tabpanel"></div>
+          <p class="summary-review-copy">Summaries are saved as you mark pages. You can edit and preview them now or before finishing.</p>
+          <button id="reviewSummariesButton" class="button button-quiet" type="button">Review page summaries</button>
         </section>
       </section>
       <div id="exerciseHeading" class="exercise-heading"><strong>Exercises</strong><button id="addExercise" class="text-button" type="button">+ Add one</button></div>
@@ -242,6 +234,21 @@
       <label id="gradeNotesWrap" class="hidden">Grade notes<textarea id="gradeNotesInput" rows="2" placeholder="Evidence, strengths, and what to review"></textarea></label>
       <div class="setup-actions"><button id="cancelFinish" class="button button-quiet" type="button">Keep studying</button><button id="saveFinish" class="button button-primary" type="submit">Save session</button></div>
     </form>
+  </dialog>
+
+  <dialog id="pageSummaryDialog" class="dialog-card page-summary-dialog" aria-labelledby="pageSummaryTitle">
+    <p class="eyebrow">YOUR READING NOTES</p>
+    <h2 id="pageSummaryTitle">Edit page summary</h2>
+    <p class="dialog-intro">Edit this page’s Markdown notes. Saved notes appear in this session’s Study record.</p>
+    <label class="summary-page-picker">Page to review<select id="summaryPageSelect" aria-label="Choose a scanned PDF page summary"></select></label>
+    <div class="summary-editor-tabs" role="tablist" aria-label="Summary editor view">
+      <button id="summaryEditTab" class="summary-editor-tab selected" type="button" role="tab" aria-selected="true">Markdown</button>
+      <button id="summaryPreviewTab" class="summary-editor-tab" type="button" role="tab" aria-selected="false">Preview</button>
+    </div>
+    <textarea id="pageSummaryEditor" class="page-summary-source" rows="12" aria-label="Edit page summary as Markdown"></textarea>
+    <div id="pageSummaryPreview" class="markdown-document page-summary-preview hidden" role="tabpanel"></div>
+    <p id="pageSummarySaveStatus" class="field-hint" role="alert" aria-live="assertive"></p>
+    <div class="setup-actions"><button id="closePageSummary" class="button button-quiet" type="button">Close</button><button id="savePageSummary" class="button button-primary" type="button">Save notes</button></div>
   </dialog>
 
   <div id="toast" class="toast" popover="manual" role="status" aria-live="polite"></div>

@@ -14,6 +14,8 @@ const appState = {
   pageRangesDraft: [],
   pageRangesDraftSessionId: null,
   summaryEditorMode: "edit",
+  pageSummaryOriginal: "",
+  pageSummaryEditingPage: null,
   pageReadPending: false,
   toastHandle: null,
   targetAlertSessionId: null,
@@ -1206,6 +1208,7 @@ async function markCurrentPageRead() {
     const decoder = new TextDecoder();
     let buffer = "";
     let recorded = false;
+    let newlyRecordedPage = null;
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
@@ -1221,6 +1224,7 @@ async function markCurrentPageRead() {
         if (eventName === "error") throw new Error(data.error || "Could not save this page.");
         if (eventName === "page_recorded") {
           recorded = true;
+          newlyRecordedPage = Number(data.viewer_page);
           appState.pageReads.push({
             viewer_page: data.viewer_page,
             printed_page: data.printed_page,
@@ -1235,6 +1239,7 @@ async function markCurrentPageRead() {
       }
     }
     if (!recorded) throw new Error("Could not save this page. Please try again.");
+    if (newlyRecordedPage) openPageSummaryDialog(newlyRecordedPage);
   } catch (error) {
     control.checked = false;
     toast(error.message);
@@ -1553,7 +1558,11 @@ function validateChapterRanges() {
 
 function renderSelectedPageSummary() {
   const page = appState.pageReads.find((item) => Number(item.viewer_page) === Number($("summaryPageSelect").value));
+  appState.pageSummaryEditingPage = page?.viewer_page ?? null;
   $("pageSummaryEditor").value = page?.summary || "";
+  appState.pageSummaryOriginal = page?.summary || "";
+  $("pageSummarySaveStatus").textContent = "";
+  $("pageSummarySaveStatus").classList.remove("summary-save-error");
   renderPageSummaryPreview();
 }
 
@@ -1576,15 +1585,51 @@ function setSummaryEditorMode(mode) {
   if (isPreview) renderPageSummaryPreview();
 }
 
-function initializePageSummaryEditor() {
+function openPageSummaryDialog(viewerPage) {
   const select = $("summaryPageSelect");
   select.replaceChildren(...sortedPageReads().map((page) => {
     const option = new Option(`p. ${page.viewer_page}`, String(page.viewer_page));
     return option;
   }));
-  if (select.options.length) select.selectedIndex = 0;
+  const index = [...select.options].findIndex((option) => Number(option.value) === Number(viewerPage));
+  if (index >= 0) select.selectedIndex = index;
   renderSelectedPageSummary();
   setSummaryEditorMode("edit");
+  openModal($("pageSummaryDialog"));
+}
+
+async function savePageSummary() {
+  const page = appState.pageReads.find((item) => Number(item.viewer_page) === Number(appState.pageSummaryEditingPage));
+  if (!page) return false;
+  const summary = $("pageSummaryEditor").value.trim();
+  if (!summary) {
+    $("pageSummarySaveStatus").textContent = "Page notes cannot be empty.";
+    $("pageSummarySaveStatus").classList.add("summary-save-error");
+    return false;
+  }
+  const button = $("savePageSummary");
+  button.disabled = true;
+  button.textContent = "Saving…";
+  $("pageSummarySaveStatus").textContent = "";
+  $("pageSummarySaveStatus").classList.remove("summary-save-error");
+  try {
+    const result = await api(`/api/session/${appState.session.id}/page-summary`, {
+      method: "POST",
+      body: JSON.stringify({ viewer_page: Number(page.viewer_page), summary }),
+    });
+    page.summary = result.page.summary;
+    appState.pageSummaryOriginal = page.summary;
+    $("pageSummaryEditor").value = page.summary;
+    renderPageSummaryPreview();
+    return true;
+  } catch (error) {
+    $("pageSummarySaveStatus").textContent = `Could not save notes: ${error.message}`;
+    $("pageSummarySaveStatus").classList.add("summary-save-error");
+    return false;
+  } finally {
+    button.disabled = false;
+    button.textContent = "Save notes";
+  }
 }
 
 function openFinishDialog() {
@@ -1618,7 +1663,6 @@ function openFinishDialog() {
     }
     renderFinishReadPages();
     initializeChapterRanges();
-    initializePageSummaryEditor();
   }
   $("exerciseRows").replaceChildren();
   if (!isPdfLesson) addExerciseRow();
@@ -1725,7 +1769,32 @@ function wireEvents() {
     addChapterRangeRow();
     saveChapterRangeDraft();
   });
-  $("summaryPageSelect").addEventListener("change", renderSelectedPageSummary);
+  $("summaryPageSelect").addEventListener("change", async () => {
+    const nextPage = Number($("summaryPageSelect").value);
+    if ($("pageSummaryEditor").value.trim() !== appState.pageSummaryOriginal.trim() && !(await savePageSummary())) {
+      $("summaryPageSelect").value = String(appState.pageSummaryEditingPage);
+      return;
+    }
+    renderSelectedPageSummary();
+    if (!Number.isNaN(nextPage)) $("summaryPageSelect").value = String(nextPage);
+  });
+  $("savePageSummary").addEventListener("click", async () => {
+    if (await savePageSummary()) $("pageSummaryDialog").close();
+  });
+  $("reviewSummariesButton").addEventListener("click", () => {
+    const firstPage = sortedPageReads()[0];
+    if (firstPage) openPageSummaryDialog(firstPage.viewer_page);
+  });
+  $("closePageSummary").addEventListener("click", async () => {
+    const saved = $("pageSummaryEditor").value.trim() === appState.pageSummaryOriginal.trim() || await savePageSummary();
+    if (saved) $("pageSummaryDialog").close();
+  });
+  $("pageSummaryDialog").addEventListener("cancel", (event) => {
+    if ($("pageSummaryEditor").value.trim() !== appState.pageSummaryOriginal.trim()) {
+      event.preventDefault();
+      toast("Save your page notes before closing.");
+    }
+  });
   $("pageSummaryEditor").addEventListener("input", renderPageSummaryPreview);
   $("summaryEditTab").addEventListener("click", () => setSummaryEditorMode("edit"));
   $("summaryPreviewTab").addEventListener("click", () => setSummaryEditorMode("preview"));

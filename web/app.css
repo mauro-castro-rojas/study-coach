@@ -2903,6 +2903,31 @@ button:disabled {
   background: #fbfcfa;
 }
 
+.page-summary-dialog {
+  width: min(860px,calc(100vw - 32px));
+  max-height: min(92vh,1000px);
+  overflow-y: auto;
+}
+
+.page-summary-dialog .page-summary-source,
+.page-summary-dialog .page-summary-preview {
+  min-height: 280px;
+  max-height: 48vh;
+  overflow-y: auto;
+}
+
+.summary-review-copy {
+  margin: 12px 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.summary-save-error {
+  color: #a2382e;
+  font-weight: 600;
+}
+
 .chapter-range-editor {
   border-color: #b9cfbd;
   background: #f4f8f4;

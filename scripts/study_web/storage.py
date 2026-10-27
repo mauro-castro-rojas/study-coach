@@ -406,6 +406,28 @@ class StudyStore:
         self._write_session_markdown(self.session(session_id))
         return row, True
 
+    def update_page_summary(self, session_id: str, viewer_page: int, summary: str) -> dict[str, Any]:
+        with self._connect() as db:
+            session = db.execute(
+                "SELECT status FROM sessions WHERE id=?", (session_id,)
+            ).fetchone()
+            if not session or session["status"] not in {"active", "paused"}:
+                raise ValueError("This session is already finished.")
+            updated = db.execute(
+                "UPDATE page_reads SET summary=? WHERE session_id=? AND viewer_page=?",
+                (summary, session_id, viewer_page),
+            )
+            if updated.rowcount != 1:
+                raise ValueError("That page has not been marked as read.")
+            row = db.execute(
+                "SELECT * FROM page_reads WHERE session_id=? AND viewer_page=?",
+                (session_id, viewer_page),
+            ).fetchone()
+        result = dict(row)
+        result["concepts"] = json.loads(result["concepts"])
+        self._write_session_markdown(self.session(session_id))
+        return result
+
     def messages(self, session_id: str) -> list[dict[str, Any]]:
         with self._connect() as db:
             rows = db.execute(

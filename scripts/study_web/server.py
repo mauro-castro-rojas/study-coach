@@ -659,6 +659,20 @@ class StudyHandler(BaseHTTPRequestHandler):
             )
         elif action == "read-page":
             self._read_page(session_id, payload)
+        elif action == "page-summary":
+            try:
+                viewer_page = int(payload.get("viewer_page"))
+            except (TypeError, ValueError) as error:
+                raise ValueError("Choose a valid PDF viewer page.") from error
+            summary = payload.get("summary")
+            if not isinstance(summary, str) or not summary.strip():
+                raise ValueError("Page notes cannot be empty.")
+            if len(summary) > 12000:
+                raise ValueError("Page notes must be 12,000 characters or fewer.")
+            self._json(
+                200,
+                {"page": self.app.store.update_page_summary(session_id, viewer_page, summary.strip())},
+            )
         else:
             self._json(404, {"error": "Not found."})
 
