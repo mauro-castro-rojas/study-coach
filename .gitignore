@@ -11,6 +11,9 @@ __pycache__/
 **/.venv/
 **/venv/
 
+# npm-installed browser dependencies
+/node_modules/
+
 # Jupyter's automatic notebook checkpoints
 **/.ipynb_checkpoints/
 

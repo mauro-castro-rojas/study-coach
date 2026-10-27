@@ -6,7 +6,10 @@
   <meta name="theme-color" content="#f3f5f1">
   <meta name="study-timezone" content="__STUDY_TIMEZONE__">
   <title>Study Room</title>
+  <link rel="stylesheet" href="/vendor/katex/katex.min.css">
   <link rel="stylesheet" href="/app.css">
+  <script type="module" src="/pdfjs/pdfjs-viewer-element.js"></script>
+  <script defer src="/vendor/katex/katex.min.js"></script>
   <script defer src="/app.js"></script>
 </head>
 <body>
@@ -64,17 +67,36 @@
       <section id="sessionView" class="view hidden">
         <div class="session-topline">
           <button id="backToDashboard" class="back-link" type="button">← Dashboard</button>
-          <span id="sessionModeBadge" class="mode-badge">GUIDED STUDY</span>
+          <div class="session-topline-actions">
+            <span id="sessionModeBadge" class="mode-badge">GUIDED STUDY</span>
+            <button id="openCodexUsage" class="button button-quiet usage-toggle" type="button" aria-haspopup="dialog" aria-controls="codexUsageDialog">Codex usage</button>
+          </div>
         </div>
         <div id="studyWorkspace" class="study-workspace">
           <section class="reader-panel" aria-label="Study reference reader">
             <div class="reader-header">
               <div class="reader-title"><p class="eyebrow" id="sessionTopicLabel">CURRENT LESSON</p><h1 id="sessionTitle">Lesson</h1><p id="sessionReference" class="lesson-reference"></p></div>
-              <button id="toggleStudyPanel" class="button button-quiet panel-toggle" type="button" aria-expanded="true">Hide study panel</button>
+              <div class="reader-header-actions">
+                <label id="pageReadControl" class="page-read-control hidden"><input id="readPageWithCoach" type="checkbox" disabled><span class="page-read-check" aria-hidden="true">✓</span><span id="pageReadLabel">Mark as read</span></label>
+                <button id="toggleStudyPanel" class="button button-quiet panel-toggle" type="button" aria-expanded="true">Hide study panel</button>
+              </div>
             </div>
             <div id="pdfReader" class="pdf-reader hidden">
-              <div class="pdf-reader-actions"><div class="pdf-reader-page-info"><span id="pdfCurrentPage" aria-live="polite">Current viewer page: —</span><small>Mark a page after you finish reading it. It will be summarized in your session record.</small></div><label class="page-read-control"><input id="readPageWithCoach" type="checkbox" disabled><span class="page-read-check" aria-hidden="true">✓</span><span id="pageReadLabel">Mark this page as read</span></label></div>
-              <iframe id="pdfFrame" title="PDF reference" src="about:blank"></iframe>
+              <section id="pageReadTracker" class="page-read-tracker hidden" aria-live="polite" aria-label="Pages sent to the Study Coach">
+                <strong id="pageReadTrackerTitle">Pages sent to Coach</strong>
+                <span id="pageReadTrackerCount" class="page-read-tracker-count"></span>
+                <ul id="pageReadTrackerList" class="page-read-tracker-list"></ul>
+              </section>
+              <pdfjs-viewer-element
+                id="pdfFrame"
+                iframe-title="PDF reference"
+                class="study-pdf-viewer"
+                c-map-url="/pdfjs-resources/cmaps/"
+                icc-url="/pdfjs-resources/iccs/"
+                standard-font-data-url="/pdfjs-resources/standard_fonts/"
+                wasm-url="/pdfjs/wasm/"
+                sandbox-bundle-src="/pdfjs/pdf.sandbox.mjs">
+              </pdfjs-viewer-element>
             </div>
             <div id="videoReader" class="video-reader hidden">
               <div class="video-reader-icon">▶</div><h2>Continue with your video reference</h2>
@@ -110,6 +132,16 @@
       </section>
     </main>
   </div>
+
+  <dialog id="codexUsageDialog" class="dialog-card codex-usage-dialog" aria-labelledby="codexUsageTitle">
+    <header class="usage-dialog-header">
+      <div><p class="eyebrow">ACCOUNT AND SESSION</p><h2 id="codexUsageTitle">Codex usage</h2></div>
+      <button id="closeCodexUsage" class="records-close" type="button" aria-label="Close Codex usage">×</button>
+    </header>
+    <p class="dialog-intro">Current usage limits and token data returned by Codex. This panel only loads when opened.</p>
+    <div id="codexUsageContent" class="codex-usage-content" aria-live="polite"><p class="usage-muted">Usage has not been loaded.</p></div>
+    <footer class="usage-dialog-footer"><span id="codexUsageUpdated" class="usage-muted"></span><button id="refreshCodexUsage" class="button button-quiet" type="button">Refresh</button></footer>
+  </dialog>
 
   <dialog id="recordsDialog" class="records-dialog">
     <header class="records-header"><div><p class="eyebrow">YOUR STUDY ARCHIVE</p><h2>Study records</h2></div><div class="records-header-actions"><button id="clearRecordsButton" class="button button-danger" type="button">Clear study records</button><button id="closeRecords" class="records-close" type="button" aria-label="Close study records">×</button></div></header>
@@ -164,7 +196,7 @@
     <p class="eyebrow">STEP 2 · FIND YOUR PLACE</p>
     <h2 id="positionTitle">Find where you want to begin.</h2>
     <p id="positionIntro" class="dialog-intro">The reference is open in another tab. Find your starting place there, then return to this browser, enter the page number, and select Begin lesson. Your study timer starts when you begin.</p>
-    <div id="previewReader" class="preview-reader hidden"><iframe id="previewPdfFrame" title="PDF reference preview" src="about:blank"></iframe></div>
+    <div id="previewReader" class="preview-reader hidden"><pdfjs-viewer-element id="previewPdfFrame" iframe-title="PDF reference preview" class="preview-pdf-viewer" c-map-url="/pdfjs-resources/cmaps/" icc-url="/pdfjs-resources/iccs/" standard-font-data-url="/pdfjs-resources/standard_fonts/" wasm-url="/pdfjs/wasm/" sandbox-bundle-src="/pdfjs/pdf.sandbox.mjs"></pdfjs-viewer-element></div>
     <form id="positionForm">
       <label id="startPositionLabel">Starting PDF page<input id="startPositionInput" inputmode="numeric" placeholder="e.g. 42"></label>
       <p id="positionHint" class="field-hint"></p>
@@ -183,6 +215,27 @@
     <form id="finishForm">
       <label id="endPositionLabel">Ending PDF page<input id="endPositionInput" inputmode="numeric" placeholder="e.g. 48"></label>
       <label id="conceptsLabel">Key concepts<textarea id="conceptsInput" rows="2" placeholder="What ideas did you work through?"></textarea></label>
+      <section id="pdfFinishSection" class="pdf-finish-section hidden" aria-label="PDF session summary and chapter ranges">
+        <section class="chapter-range-editor">
+          <div class="finish-section-heading"><div><h3>Chapter and section <span class="required-tag">Required</span></h3><p>Enter the chapter and section for the pages the Coach read. Add another range only when you moved into a different chapter or section. Use PDF page numbers.</p></div><button id="addChapterRange" class="text-button" type="button">+ Add range</button></div>
+          <div id="chapterRangeRows" class="chapter-range-rows"></div>
+          <p id="chapterRangeError" class="finish-validation-error hidden" role="alert"></p>
+        </section>
+        <section class="finish-pages-card">
+          <h3>Pages scanned by the Coach</h3>
+          <ul id="finishReadPageList" class="finish-read-page-list"></ul>
+        </section>
+        <section class="page-summary-editor">
+          <div class="finish-section-heading"><div><h3>Review page summaries</h3><p>Edit the Markdown and preview how it will appear in Study records.</p></div></div>
+          <label class="summary-page-picker">Page to review<select id="summaryPageSelect" aria-label="Choose a scanned PDF page summary"></select></label>
+          <div class="summary-editor-tabs" role="tablist" aria-label="Summary editor view">
+            <button id="summaryEditTab" class="summary-editor-tab selected" type="button" role="tab" aria-selected="true">Markdown</button>
+            <button id="summaryPreviewTab" class="summary-editor-tab" type="button" role="tab" aria-selected="false">Preview</button>
+          </div>
+          <textarea id="pageSummaryEditor" class="page-summary-source" rows="10" aria-label="Edit page summary as Markdown"></textarea>
+          <div id="pageSummaryPreview" class="markdown-document page-summary-preview hidden" role="tabpanel"></div>
+        </section>
+      </section>
       <div id="exerciseHeading" class="exercise-heading"><strong>Exercises</strong><button id="addExercise" class="text-button" type="button">+ Add one</button></div>
       <div id="exerciseRows" class="exercise-rows"></div>
       <label id="scoreWrap" class="hidden">Assessment score (0–10)<input id="scoreInput" type="number" min="0" max="10" step="0.5"></label>

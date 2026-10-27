@@ -35,6 +35,23 @@ def main() -> int:
     parser.add_argument("--no-browser", action="store_true", help="start the local server without opening a browser")
     args = parser.parse_args()
 
+    pdfjs_dist = ROOT / "node_modules" / "@missing-elements" / "pdfjs-viewer" / "dist"
+    required_assets = (
+        pdfjs_dist / "pdfjs-viewer-element.js",
+        pdfjs_dist / "viewer.mjs",
+        pdfjs_dist / "pdf.mjs",
+        pdfjs_dist / "pdf.worker.min.mjs",
+        pdfjs_dist / "viewer.css",
+        pdfjs_dist / "paper-and-ink.css",
+        ROOT / "node_modules" / "katex" / "dist" / "katex.min.js",
+        ROOT / "node_modules" / "katex" / "dist" / "katex.min.css",
+    )
+    missing_assets = [path for path in required_assets if not path.is_file()]
+    if missing_assets:
+        print("Study Room browser dependencies are missing. Run `npm ci` from the project root.", file=sys.stderr)
+        print("See README.md for Node.js setup instructions.", file=sys.stderr)
+        return 1
+
     plan_path = ROOT / "config" / "study-plan.json"
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
     app = StudyApplication(ROOT, plan)

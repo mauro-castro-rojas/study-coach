@@ -1,0 +1,12 @@
+{
+  "name": "study-room",
+  "private": true,
+  "description": "Browser dependencies for the local Study Room app",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "dependencies": {
+    "@missing-elements/pdfjs-viewer": "4.4.0",
+    "katex": "0.19.1"
+  }
+}

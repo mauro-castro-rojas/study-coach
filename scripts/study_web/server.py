@@ -104,6 +104,67 @@ class StudyApplication:
             raise ValueError("Choose a reasoning effort supported by the selected model.")
         return selected["model"], requested_effort
 
+    def codex_usage(self) -> dict[str, Any]:
+        auth = self.auth_status()
+        if not auth["authenticated"]:
+            raise PermissionError("Connect ChatGPT to view Codex usage.")
+
+        bridge = self.bridge()
+        limits_result = bridge.request("account/rateLimits/read")
+        buckets = limits_result.get("rateLimitsByLimitId") or {}
+        if not buckets and isinstance(limits_result.get("rateLimits"), dict):
+            limit = limits_result["rateLimits"]
+            buckets = {str(limit.get("limitId") or "codex"): limit}
+
+        rate_limits = []
+        for limit_id, bucket in buckets.items():
+            if not isinstance(bucket, dict):
+                continue
+            name = str(bucket.get("limitName") or limit_id)
+            for window_name in ("primary", "secondary"):
+                window = bucket.get(window_name)
+                if not isinstance(window, dict):
+                    continue
+                rate_limits.append({
+                    "limit_name": name,
+                    "window_name": window_name,
+                    "used_percent": window.get("usedPercent"),
+                    "window_duration_mins": window.get("windowDurationMins"),
+                    "resets_at": window.get("resetsAt"),
+                })
+
+        active = self.store.active_session()
+        thread_id = self.store.thread_id(active["id"]) if active else None
+        thread_usage = None
+        usage_error = ""
+        if thread_id:
+            try:
+                usage_result = bridge.request("account/usage/read", {"threadId": thread_id})
+                raw_usage = usage_result.get("threadUsage")
+                if isinstance(raw_usage, dict):
+                    groups = [
+                        {
+                            "model": group.get("model"),
+                            "reasoning_effort": group.get("reasoningEffort"),
+                            "total_tokens": group.get("totalTokens"),
+                            "input_tokens": group.get("inputTokens"),
+                            "output_tokens": group.get("outputTokens"),
+                        }
+                        for group in raw_usage.get("groups", [])
+                        if isinstance(group, dict)
+                    ]
+                    thread_usage = {"groups": groups}
+            except CodexError as error:
+                usage_error = str(error)
+
+        return {
+            "plan": auth.get("plan"),
+            "rate_limits": rate_limits,
+            "thread_usage": thread_usage,
+            "usage_error": usage_error,
+            "updated_at": int(time.time()),
+        }
+
     def new_session(self, payload: dict[str, Any]) -> dict[str, Any]:
         auth = self.auth_status()
         if not auth["authenticated"]:
@@ -230,6 +291,8 @@ class StudyApplication:
         session = self.store.session(session_id)
         is_pdf_lesson = session["reference_kind"] == "book" and session["mode"] != "assessment"
         end_position = str(payload.get("end_position", "")).strip()
+        page_ranges: list[dict[str, Any]] = []
+        page_summaries: dict[int, str] = {}
         if session["mode"] == "assessment":
             end_position = ""
         elif is_pdf_lesson:
@@ -237,6 +300,73 @@ class StudyApplication:
             if not page_reads:
                 raise ValueError("Mark at least one PDF page as read before finishing this session.")
             end_position = str(max(page["viewer_page"] for page in page_reads))
+            raw_ranges = payload.get("page_ranges")
+            if not isinstance(raw_ranges, list) or not raw_ranges:
+                raise ValueError("Add a chapter and section range for the pages you read.")
+            if len(raw_ranges) > 100:
+                raise ValueError("A session can contain at most 100 chapter and section ranges.")
+            for item in raw_ranges:
+                if not isinstance(item, dict):
+                    raise ValueError("Check the chapter and section range entries.")
+                chapter = " ".join(str(item.get("chapter", "")).split())[:160]
+                section = " ".join(str(item.get("section", "")).split())[:200]
+                raw_start_page = item.get("start_page")
+                raw_end_page = item.get("end_page")
+                if raw_start_page is None or raw_end_page is None:
+                    raise ValueError("Enter valid PDF page ranges.")
+                try:
+                    start_page = int(raw_start_page)
+                    end_page = int(raw_end_page)
+                except (TypeError, ValueError) as error:
+                    raise ValueError("Enter valid PDF page ranges.") from error
+                if not chapter or not section:
+                    raise ValueError("Enter a chapter and section for every range.")
+                if start_page < 1 or end_page < start_page:
+                    raise ValueError("Each PDF page range must end at or after its starting page.")
+                page_ranges.append({
+                    "chapter": chapter,
+                    "section": section,
+                    "start_page": start_page,
+                    "end_page": end_page,
+                })
+            page_ranges.sort(key=lambda item: item["start_page"])
+            for previous, current in zip(page_ranges, page_ranges[1:]):
+                if current["start_page"] <= previous["end_page"]:
+                    raise ValueError("Chapter and section PDF page ranges cannot overlap.")
+
+            viewer_pages = {int(page["viewer_page"]) for page in page_reads}
+            for viewer_page in viewer_pages:
+                matches = [
+                    item
+                    for item in page_ranges
+                    if item["start_page"] <= viewer_page <= item["end_page"]
+                ]
+                if len(matches) != 1:
+                    raise ValueError(f"Assign scanned PDF page {viewer_page} to exactly one range.")
+
+            raw_summaries = payload.get("page_summaries")
+            if not isinstance(raw_summaries, list):
+                raise ValueError("Review the scanned page summaries before saving.")
+            for item in raw_summaries:
+                if not isinstance(item, dict):
+                    raise ValueError("Check the page summary entries.")
+                raw_viewer_page = item.get("viewer_page")
+                if raw_viewer_page is None:
+                    raise ValueError("A page summary has an invalid PDF viewer page.")
+                try:
+                    viewer_page = int(raw_viewer_page)
+                except (TypeError, ValueError) as error:
+                    raise ValueError("A page summary has an invalid PDF viewer page.") from error
+                summary = item.get("summary")
+                if not isinstance(summary, str) or not summary.strip():
+                    raise ValueError(f"The summary for PDF page {viewer_page} cannot be empty.")
+                if len(summary) > 12000:
+                    raise ValueError(f"The summary for PDF page {viewer_page} is too long.")
+                if viewer_page in page_summaries:
+                    raise ValueError(f"PDF page {viewer_page} appears more than once in the summaries.")
+                page_summaries[viewer_page] = summary.strip()
+            if set(page_summaries) != viewer_pages:
+                raise ValueError("Review a summary for every PDF page marked as read.")
         elif session["reference_kind"] == "book":
             try:
                 if int(end_position) < int(session["start_position"]):
@@ -290,6 +420,8 @@ class StudyApplication:
             cleaned,
             score=score,
             grade_notes=str(payload.get("grade_notes", ""))[:4000],
+            page_ranges=page_ranges,
+            page_summaries=page_summaries,
         )
 
 
@@ -347,8 +479,24 @@ class StudyHandler(BaseHTTPRequestHandler):
             self.send_response(204)
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
+        elif path.startswith("/pdfjs-resources/"):
+            self._static(
+                path.removeprefix("/pdfjs-resources/"),
+                asset_root=self.app.root / "node_modules" / "pdfjs-dist",
+                cache_asset=True,
+            )
         elif path.startswith("/pdfjs/"):
-            self._static(path.lstrip("/"))
+            self._static(
+                path.removeprefix("/pdfjs/"),
+                asset_root=self.app.root / "node_modules" / "@missing-elements" / "pdfjs-viewer" / "dist",
+                cache_asset=True,
+            )
+        elif path.startswith("/vendor/katex/"):
+            self._static(
+                path.removeprefix("/vendor/katex/"),
+                asset_root=self.app.root / "node_modules" / "katex" / "dist",
+                cache_asset=True,
+            )
         elif path in {"/app.js", "/app.css"}:
             name = path.lstrip("/")
             content_type = "text/javascript; charset=utf-8" if name.endswith(".js") else "text/css; charset=utf-8"
@@ -370,6 +518,13 @@ class StudyHandler(BaseHTTPRequestHandler):
             self._record_content(path)
         elif path == "/api/auth/status":
             self._json(200, self.app.auth_status())
+        elif path == "/api/codex/usage":
+            try:
+                self._json(200, self.app.codex_usage())
+            except PermissionError as error:
+                self._json(401, {"error": str(error)})
+            except (CodexError, OSError) as error:
+                self._json(502, {"error": str(error)})
         elif path == "/api/codex/models":
             try:
                 self._json(200, {"models": self.app.coach_models()})
@@ -451,6 +606,7 @@ class StudyHandler(BaseHTTPRequestHandler):
             session = self.app.store.session_for_export(filename)
             if session:
                 record["page_reads"] = session["page_reads"]
+                record["page_ranges"] = session["page_ranges"]
         self._json(200, record)
 
     def do_POST(self) -> None:
@@ -576,6 +732,8 @@ class StudyHandler(BaseHTTPRequestHandler):
                 {
                     "viewer_page": existing["viewer_page"],
                     "printed_page": existing["printed_page"],
+                    "summary": existing["summary"],
+                    "concepts": existing["concepts"],
                     "exercise_message": "",
                 },
             )
@@ -606,7 +764,10 @@ class StudyHandler(BaseHTTPRequestHandler):
             "null if it is unclear. The summary should briefly explain the page's actual main "
             "ideas, commands, and diagrams where present. Return at most three key concepts for "
             "this page. Choose the central ideas, combine closely related terms, and do not list "
-            "every named term. Keep concepts specific to this page. "
+            "every named term. Keep concepts specific to this page. Preserve any mathematical "
+            "notation in the summary as valid TeX: use \\(...\\) "
+            "for inline formulas, and put longer equations, determinants, and matrices inside "
+            "\\[...\\] on separate lines. Do not wrap formulas in code spans or code fences. "
             "Only include an exercise if the page itself contains a learner task or question; "
             "preserve its printed number and wording as closely as readable. Do not invent an "
             "exercise, add a retrieval question, greet or address the learner, summarize your "
@@ -715,6 +876,8 @@ class StudyHandler(BaseHTTPRequestHandler):
                                     {
                                         "viewer_page": saved["viewer_page"],
                                         "printed_page": saved["printed_page"],
+                                        "summary": saved["summary"],
+                                        "concepts": saved["concepts"],
                                         "book_exercises": page_data["book_exercises"] if created else [],
                                         "exercise_message": exercise_text,
                                     },
@@ -796,9 +959,16 @@ class StudyHandler(BaseHTTPRequestHandler):
         self.wfile.write(f"event: {event_name}\ndata: {payload}\n\n".encode("utf-8"))
         self.wfile.flush()
 
-    def _static(self, filename: str, content_type: str | None = None) -> None:
-        root = self.app.web_root.resolve()
-        path = (self.app.web_root / filename).resolve()
+    def _static(
+        self,
+        filename: str,
+        content_type: str | None = None,
+        *,
+        asset_root: Path | None = None,
+        cache_asset: bool = False,
+    ) -> None:
+        root = (asset_root or self.app.web_root).resolve()
+        path = (root / filename).resolve()
         if not path.is_relative_to(root) or not path.is_file():
             self._json(404, {"error": "Dashboard asset not found."})
             return
@@ -821,7 +991,7 @@ class StudyHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header(
             "Cache-Control",
-            "private, max-age=86400" if filename.startswith("pdfjs/") else "no-store",
+            "private, max-age=86400" if cache_asset else "no-store",
         )
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")

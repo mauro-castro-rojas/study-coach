@@ -9,7 +9,11 @@ const appState = {
   heartbeatHandle: null,
   localClockHandle: null,
   readerPage: 1,
+  pdfViewerApps: {},
   pageReads: [],
+  pageRangesDraft: [],
+  pageRangesDraftSessionId: null,
+  summaryEditorMode: "edit",
   pageReadPending: false,
   toastHandle: null,
   targetAlertSessionId: null,
@@ -40,6 +44,112 @@ const api = async (path, options = {}) => {
   if (!response.ok) throw new Error(body.error || `Request failed (${response.status}).`);
   return body;
 };
+
+function formatTokenCount(value) {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return "—";
+  return new Intl.NumberFormat().format(Number(value));
+}
+
+function formatUsageWindow(minutes, fallback) {
+  if (!Number.isFinite(Number(minutes)) || Number(minutes) <= 0) {
+    return fallback === "primary" ? "Primary window" : "Secondary window";
+  }
+  const duration = Number(minutes);
+  if (duration % 1440 === 0) return `${duration / 1440}-day window`;
+  if (duration % 60 === 0) return `${duration / 60}-hour window`;
+  return `${duration}-minute window`;
+}
+
+function usageElement(tag, className, text) {
+  const element = document.createElement(tag);
+  if (className) element.className = className;
+  if (text) element.textContent = text;
+  return element;
+}
+
+function renderCodexUsage(data) {
+  const content = $("codexUsageContent");
+  content.replaceChildren();
+
+  const plan = data.plan ? `Signed in with ChatGPT · ${data.plan}` : "Signed in with ChatGPT";
+  content.append(usageElement("p", "usage-account", plan));
+
+  const limitsHeading = usageElement("h3", "usage-section-title", "Usage limits");
+  content.append(limitsHeading);
+  if (!data.rate_limits?.length) {
+    content.append(usageElement("p", "usage-muted", "Codex did not return any active usage windows."));
+  } else {
+    const limits = usageElement("div", "usage-limit-list");
+    data.rate_limits.forEach((window) => {
+      const card = usageElement("article", "usage-limit-card");
+      const heading = usageElement("div", "usage-limit-heading");
+      heading.append(
+        usageElement("strong", "", window.limit_name),
+        usageElement("span", "", formatUsageWindow(window.window_duration_mins, window.window_name)),
+      );
+      card.append(heading);
+
+      if (window.used_percent !== null && window.used_percent !== undefined && Number.isFinite(Number(window.used_percent))) {
+        const used = Math.min(100, Math.max(0, Number(window.used_percent)));
+        const progress = usageElement("progress", "usage-progress");
+        progress.max = 100;
+        progress.value = used;
+        progress.setAttribute("aria-label", `${window.limit_name} ${window.window_name} usage`);
+        card.append(progress);
+        card.append(usageElement("p", "usage-limit-detail", `${Math.round(100 - used)}% remaining · ${Math.round(used)}% used`));
+      } else {
+        card.append(usageElement("p", "usage-limit-detail", "Usage percentage not provided."));
+      }
+
+      if (Number.isFinite(Number(window.resets_at)) && Number(window.resets_at) > 0) {
+        const reset = new Date(Number(window.resets_at) * 1000);
+        card.append(usageElement("p", "usage-reset", `Resets ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(reset)}`));
+      }
+      limits.append(card);
+    });
+    content.append(limits);
+  }
+
+  content.append(usageElement("h3", "usage-section-title", "This Study Coach conversation"));
+  const groups = data.thread_usage?.groups || [];
+  const tokenGroups = groups.filter((group) => group.total_tokens !== null && group.total_tokens !== undefined);
+  if (!tokenGroups.length) {
+    const note = data.usage_error || "Token totals are not available for this conversation yet.";
+    content.append(usageElement("p", "usage-muted", note));
+  } else {
+    const totalTokens = tokenGroups.reduce((total, group) => total + (Number(group.total_tokens) || 0), 0);
+    content.append(usageElement("p", "usage-token-total", `${formatTokenCount(totalTokens)} tokens`));
+    content.append(usageElement("p", "usage-muted", "Total tokens attributed to the current Study Coach conversation."));
+    const breakdown = usageElement("ul", "usage-model-list");
+    tokenGroups.forEach((group) => {
+      const model = group.model || "Model not reported";
+      const effort = group.reasoning_effort ? ` · ${group.reasoning_effort} effort` : "";
+      const item = usageElement("li", "", `${model}${effort}: ${formatTokenCount(group.total_tokens)} tokens`);
+      breakdown.append(item);
+    });
+    content.append(breakdown);
+  }
+
+  const updated = new Date(Number(data.updated_at) * 1000);
+  $("codexUsageUpdated").textContent = `Updated ${new Intl.DateTimeFormat(undefined, { timeStyle: "short" }).format(updated)}`;
+}
+
+async function loadCodexUsage() {
+  const refresh = $("refreshCodexUsage");
+  const content = $("codexUsageContent");
+  refresh.disabled = true;
+  refresh.textContent = "Loading…";
+  content.replaceChildren(usageElement("p", "usage-muted", "Loading usage from Codex…"));
+  try {
+    renderCodexUsage(await api("/api/codex/usage"));
+  } catch (error) {
+    content.replaceChildren(usageElement("p", "usage-error", error.message));
+    $("codexUsageUpdated").textContent = "";
+  } finally {
+    refresh.disabled = false;
+    refresh.textContent = "Refresh";
+  }
+}
 
 function readCoachPreferences() {
   try {
@@ -145,39 +255,29 @@ function renderLocalClock() {
   }).format(now);
 }
 
-function pdfUrl(reference, page) {
-  const base = reference.route.split("#", 1)[0];
-  return `/pdfjs/web/viewer.html?file=${encodeURIComponent(base)}#page=${page}`;
-}
-
-function bindPdfViewer(frameId) {
-  const frame = $(frameId);
-  const attach = (attempt = 0) => {
-    let application;
-    try {
-      application = frame.contentWindow?.PDFViewerApplication;
-    } catch {
-      return;
-    }
-    if (!application?.eventBus || !application?.pdfViewer) {
-      if (attempt < 80) setTimeout(() => attach(attempt + 1), 100);
-      return;
-    }
+async function bindPdfViewer(viewerId) {
+  const element = $(viewerId);
+  try {
+    await customElements.whenDefined("pdfjs-viewer-element");
+    const { viewerApp } = await element.initPromise;
+    appState.pdfViewerApps[viewerId] = viewerApp;
+    if (element.dataset.studyRoomBound === "true") return;
+    element.dataset.studyRoomBound = "true";
     const syncPage = ({ pageNumber } = {}) => {
-      const page = Number(pageNumber || application.pdfViewer.currentPageNumber || 1);
-      appState.readerPage = page;
-      if (frameId === "pdfFrame") {
-        $("pdfCurrentPage").textContent = `Current viewer page: ${page}`;
+      const page = Number(pageNumber || viewerApp.pdfViewer.currentPageNumber || 1);
+      if (viewerId === "pdfFrame") {
+        appState.readerPage = page;
         updatePageReadControl();
-      } else if (frameId === "previewPdfFrame") {
+      } else if (viewerId === "previewPdfFrame") {
         $("startPositionInput").value = String(page);
       }
     };
-    application.eventBus.on("pagechanging", syncPage);
-    application.eventBus.on("pagesloaded", syncPage);
+    viewerApp.eventBus.on("pagechanging", syncPage);
+    viewerApp.eventBus.on("pagesloaded", syncPage);
     syncPage();
-  };
-  attach();
+  } catch (error) {
+    console.warn("Could not connect the PDF viewer to Study Room", error);
+  }
 }
 
 function updatePageReadControl() {
@@ -185,10 +285,11 @@ function updatePageReadControl() {
   if (!control) return;
   const page = Number(appState.readerPage);
   const recorded = appState.pageReads.some((item) => Number(item.viewer_page) === page);
-  const loaded = Boolean($("pdfFrame").contentWindow?.PDFViewerApplication?.pdfDocument);
+  const loaded = Boolean(appState.pdfViewerApps.pdfFrame?.pdfDocument);
   control.checked = recorded;
   control.disabled = appState.pageReadPending || !loaded || !page || recorded || $("sendButton").disabled;
-  $("pageReadLabel").textContent = recorded ? "Page recorded" : "Mark this page as read";
+  $("pageReadLabel").textContent = recorded ? "Page read" : "Mark as read";
+  renderPageReadTracker();
   const requiresPage = appState.session?.reference_kind === "book" && appState.session?.mode !== "assessment";
   const needsReadPage = requiresPage && appState.pageReads.length === 0;
   $("finishButton").disabled = Boolean(needsReadPage || appState.pageReadPending);
@@ -196,6 +297,21 @@ function updatePageReadControl() {
     ? "Wait for this page to finish saving before ending the session."
     : "Mark at least one PDF page as read to finish and log this lesson.";
   $("pdfFinishHint").classList.toggle("hidden", !needsReadPage && !appState.pageReadPending);
+}
+
+function renderPageReadTracker() {
+  const pages = sortedPageReads();
+  const tracker = $("pageReadTracker");
+  if (!tracker) return;
+  tracker.classList.toggle("hidden", pages.length === 0);
+  $("pageReadTrackerCount").textContent = `${pages.length} ${pages.length === 1 ? "page" : "pages"}`;
+  const list = $("pageReadTrackerList");
+  list.replaceChildren(...pages.map((page) => {
+    const item = document.createElement("li");
+    item.textContent = `p. ${page.viewer_page}`;
+    item.title = `PDF viewer page ${page.viewer_page} was sent to the Study Coach`;
+    return item;
+  }));
 }
 
 function setPdfPage(reference, page, frameId, inputId, labelId) {
@@ -207,7 +323,11 @@ function setPdfPage(reference, page, frameId, inputId, labelId) {
   appState.readerPage = requested;
   if (inputId) $(inputId).value = String(requested);
   if (labelId) $(labelId).textContent = `Page ${requested}`;
-  $(frameId).src = pdfUrl(reference, requested);
+  const viewer = $(frameId);
+  viewer.setAttribute("assets-base", "/pdfjs/");
+  viewer.setAttribute("src", reference.route.split("#", 1)[0]);
+  viewer.setAttribute("page", String(requested));
+  bindPdfViewer(frameId);
   if (frameId === "previewPdfFrame") $("startPositionInput").value = String(requested);
 }
 
@@ -533,16 +653,34 @@ function escapeHtml(value) {
 }
 
 function renderInlineMarkdown(text) {
-  let html = escapeHtml(text);
-  const codeSpans = [];
-  html = html.replace(/`([^`\n]+)`/g, (_match, code) => {
-    codeSpans.push(`<code>${code}</code>`);
-    return `%%INLINECODE${codeSpans.length - 1}%%`;
-  });
+  let source = String(text);
+  const inlineTokens = [];
+  const preserve = (html) => {
+    inlineTokens.push(html);
+    return `%%INLINETOKEN${inlineTokens.length - 1}%%`;
+  };
+  source = source.replace(/`([^`\n]+)`/g, (_match, code) => preserve(`<code>${escapeHtml(code)}</code>`));
+  source = source.replace(/\\\(([\s\S]+?)\\\)/g, (_match, formula) => (
+    preserve(renderMath(formula, false))
+  ));
+  let html = escapeHtml(source);
   html = html
     .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
     .replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, "<em>$1</em>");
-  return html.replace(/%%INLINECODE(\d+)%%/g, (_match, index) => codeSpans[Number(index)]);
+  return html.replace(/%%INLINETOKEN(\d+)%%/g, (_match, index) => inlineTokens[Number(index)]);
+}
+
+function renderMath(formula, displayMode) {
+  if (!window.katex) return escapeHtml(formula);
+  try {
+    return window.katex.renderToString(formula, {
+      displayMode,
+      throwOnError: false,
+      trust: false,
+    });
+  } catch {
+    return `<code class="math-fallback">${escapeHtml(formula)}</code>`;
+  }
 }
 
 function renderMarkdown(text) {
@@ -591,6 +729,30 @@ function renderMarkdown(text) {
     }
     if (codeLines) {
       codeLines.push(line);
+      continue;
+    }
+    const singleLineMath = line.match(/^\s*\\\[([\s\S]*?)\\\]\s*$/);
+    if (singleLineMath) {
+      flushParagraph();
+      flushList();
+      output.push(`<div class="math-display">${renderMath(singleLineMath[1].trim(), true)}</div>`);
+      continue;
+    }
+    if (/^\s*\\\[\s*$/.test(line)) {
+      flushParagraph();
+      flushList();
+      const formulaLines = [];
+      let closingLine = lineIndex + 1;
+      while (closingLine < lines.length && !/^\s*\\\]\s*$/.test(lines[closingLine])) {
+        formulaLines.push(lines[closingLine]);
+        closingLine += 1;
+      }
+      if (closingLine < lines.length) {
+        output.push(`<div class="math-display">${renderMath(formulaLines.join("\n").trim(), true)}</div>`);
+        lineIndex = closingLine;
+        continue;
+      }
+      paragraph.push(line);
       continue;
     }
     if (line.includes("|") && lines[lineIndex + 1] && isTableDivider(lines[lineIndex + 1])) {
@@ -721,7 +883,13 @@ async function readStudyRecord(record, selectedButton) {
             const pageSection = document.createElement("section");
             pageSection.className = "record-page-summary";
             const heading = document.createElement("h3");
-            heading.textContent = `PDF viewer page ${page.viewer_page}${page.printed_page ? ` · printed page ${page.printed_page}` : ""}`;
+            const pageRange = (data.page_ranges || []).find((item) => (
+              Number(item.start_page) <= Number(page.viewer_page)
+              && Number(page.viewer_page) <= Number(item.end_page)
+            ));
+            heading.textContent = pageRange
+              ? `Chapter ${pageRange.chapter} · Section ${pageRange.section} · p. ${page.viewer_page}`
+              : `p. ${page.viewer_page}`;
             const summary = document.createElement("div");
             summary.className = "markdown-document";
             summary.innerHTML = renderMarkdown(page.summary);
@@ -988,7 +1156,7 @@ async function streamChat(sessionId, text, initial = false, imageDataUrl = null,
 async function markCurrentPageRead() {
   if (!appState.session || !appState.reference || appState.reference.kind !== "book") return;
   if ($("sendButton").disabled || appState.pageReadPending) return;
-  const viewer = $("pdfFrame").contentWindow?.PDFViewerApplication;
+  const viewer = appState.pdfViewerApps.pdfFrame;
   const pageNumber = Number(viewer?.pdfViewer?.currentPageNumber || 0);
   if (!viewer?.pdfDocument || !Number.isInteger(pageNumber) || pageNumber < 1) {
     toast("The PDF page is still loading. Try again in a moment.");
@@ -1053,7 +1221,12 @@ async function markCurrentPageRead() {
         if (eventName === "error") throw new Error(data.error || "Could not save this page.");
         if (eventName === "page_recorded") {
           recorded = true;
-          appState.pageReads.push({ viewer_page: data.viewer_page, printed_page: data.printed_page });
+          appState.pageReads.push({
+            viewer_page: data.viewer_page,
+            printed_page: data.printed_page,
+            summary: data.summary,
+            concepts: data.concepts || [],
+          });
           appState.session.page_reads = appState.pageReads;
           if (data.exercise_message) appendMessage("assistant", data.exercise_message);
           updatePageReadControl();
@@ -1076,6 +1249,7 @@ async function markCurrentPageRead() {
 function showSession(session, messages = []) {
   appState.session = session;
   appState.pageReads = session.page_reads || [];
+  renderPageReadTracker();
   appState.pageReadPending = false;
   if (appState.targetAlertSessionId !== session.id) {
     appState.targetAlertSessionId = session.id;
@@ -1100,10 +1274,10 @@ function showSession(session, messages = []) {
   const needsReadPage = hasPdf && appState.pageReads.length === 0;
   const hasVideo = session.reference_kind === "video" && session.mode !== "assessment";
   $("pdfReader").classList.toggle("hidden", !hasPdf);
+  $("pageReadControl").classList.toggle("hidden", !hasPdf);
   $("readPageWithCoach").disabled = true;
   $("pdfFinishHint").classList.toggle("hidden", !needsReadPage);
   $("finishButton").disabled = needsReadPage;
-  $("pdfCurrentPage").textContent = "Current viewer page: loading…";
   $("videoReader").classList.toggle("hidden", !hasVideo);
   $("assessmentReader").classList.toggle("hidden", session.mode !== "assessment");
   $("studyWorkspace").classList.remove("panel-hidden");
@@ -1280,30 +1454,194 @@ function addExerciseRow() {
   $("exerciseRows").append(row);
 }
 
+function sortedPageReads() {
+  return [...appState.pageReads].sort((a, b) => Number(a.viewer_page) - Number(b.viewer_page));
+}
+
+function renderFinishReadPages() {
+  const list = $("finishReadPageList");
+  list.replaceChildren();
+  for (const page of sortedPageReads()) {
+    const item = document.createElement("li");
+    item.textContent = `p. ${page.viewer_page}`;
+    list.append(item);
+  }
+}
+
+function saveChapterRangeDraft() {
+  appState.pageRangesDraft = [...$("chapterRangeRows").querySelectorAll(".chapter-range-row")].map((row) => ({
+    chapter: row.querySelector(".range-chapter").value.trim(),
+    section: row.querySelector(".range-section").value.trim(),
+    start_page: row.querySelector(".range-start-page").value,
+    end_page: row.querySelector(".range-end-page").value,
+  }));
+}
+
+function addChapterRangeRow(range = {}) {
+  const row = document.createElement("fieldset");
+  row.className = "chapter-range-row";
+  row.innerHTML = `
+    <legend class="visually-hidden">Chapter and section page range</legend>
+    <div class="chapter-range-fields">
+      <label>Chapter number or title<input class="range-chapter" maxlength="160" placeholder="e.g. 2 or File systems" value="${escapeHtml(range.chapter || "")}" required></label>
+      <label>Section number or title<input class="range-section" maxlength="200" placeholder="e.g. 3 or Managing files" value="${escapeHtml(range.section || "")}" required></label>
+      <label>From PDF page<input class="range-start-page" type="number" min="1" step="1" value="${escapeHtml(range.start_page ?? "")}" required></label>
+      <label>To PDF page<input class="range-end-page" type="number" min="1" step="1" value="${escapeHtml(range.end_page ?? "")}" required></label>
+    </div>
+    <button class="remove-chapter-range text-button" type="button" aria-label="Remove chapter and section range">Remove range</button>`;
+  row.addEventListener("input", saveChapterRangeDraft);
+  row.querySelector(".remove-chapter-range").addEventListener("click", () => {
+    if ($("chapterRangeRows").children.length <= 1) return;
+    row.remove();
+    saveChapterRangeDraft();
+  });
+  $("chapterRangeRows").append(row);
+}
+
+function initializeChapterRanges() {
+  const rows = $("chapterRangeRows");
+  rows.replaceChildren();
+  const pages = sortedPageReads().map((page) => Number(page.viewer_page));
+  const ranges = appState.pageRangesDraft.length
+    ? appState.pageRangesDraft
+    : appState.session.page_ranges?.length
+      ? appState.session.page_ranges
+      : pages.length ? [{ start_page: Math.min(...pages), end_page: Math.max(...pages) }] : [];
+  for (const range of ranges) addChapterRangeRow(range);
+  if (!ranges.length) addChapterRangeRow();
+  saveChapterRangeDraft();
+}
+
+function validateChapterRanges() {
+  const error = $("chapterRangeError");
+  error.classList.add("hidden");
+  const ranges = [...$("chapterRangeRows").querySelectorAll(".chapter-range-row")].map((row) => ({
+    chapter: row.querySelector(".range-chapter").value.trim(),
+    section: row.querySelector(".range-section").value.trim(),
+    start_page: Number(row.querySelector(".range-start-page").value),
+    end_page: Number(row.querySelector(".range-end-page").value),
+  }));
+  const fail = (message) => {
+    error.textContent = message;
+    error.classList.remove("hidden");
+    return null;
+  };
+  if (ranges.some((range) => !range.chapter || !range.section)) {
+    return fail("Enter a chapter and section for every range.");
+  }
+  if (ranges.some((range) => !Number.isInteger(range.start_page) || !Number.isInteger(range.end_page)
+    || range.start_page < 1 || range.end_page < range.start_page)) {
+    return fail("Enter a valid starting and ending PDF page for every range.");
+  }
+  ranges.sort((a, b) => a.start_page - b.start_page);
+  for (let index = 1; index < ranges.length; index += 1) {
+    if (ranges[index].start_page <= ranges[index - 1].end_page) {
+      return fail("Ranges cannot overlap. Adjust their PDF page boundaries.");
+    }
+  }
+  for (const page of sortedPageReads()) {
+    const matchingRanges = ranges.filter((range) => (
+      range.start_page <= Number(page.viewer_page) && Number(page.viewer_page) <= range.end_page
+    ));
+    if (matchingRanges.length !== 1) {
+      return fail(`Assign scanned PDF page ${page.viewer_page} to exactly one chapter and section range.`);
+    }
+  }
+  saveChapterRangeDraft();
+  return ranges;
+}
+
+function renderSelectedPageSummary() {
+  const page = appState.pageReads.find((item) => Number(item.viewer_page) === Number($("summaryPageSelect").value));
+  $("pageSummaryEditor").value = page?.summary || "";
+  renderPageSummaryPreview();
+}
+
+function renderPageSummaryPreview() {
+  const editor = $("pageSummaryEditor");
+  const page = appState.pageReads.find((item) => Number(item.viewer_page) === Number($("summaryPageSelect").value));
+  if (page) page.summary = editor.value;
+  $("pageSummaryPreview").innerHTML = renderMarkdown(editor.value);
+}
+
+function setSummaryEditorMode(mode) {
+  appState.summaryEditorMode = mode;
+  const isPreview = mode === "preview";
+  $("pageSummaryEditor").classList.toggle("hidden", isPreview);
+  $("pageSummaryPreview").classList.toggle("hidden", !isPreview);
+  $("summaryEditTab").classList.toggle("selected", !isPreview);
+  $("summaryPreviewTab").classList.toggle("selected", isPreview);
+  $("summaryEditTab").setAttribute("aria-selected", String(!isPreview));
+  $("summaryPreviewTab").setAttribute("aria-selected", String(isPreview));
+  if (isPreview) renderPageSummaryPreview();
+}
+
+function initializePageSummaryEditor() {
+  const select = $("summaryPageSelect");
+  select.replaceChildren(...sortedPageReads().map((page) => {
+    const option = new Option(`p. ${page.viewer_page}`, String(page.viewer_page));
+    return option;
+  }));
+  if (select.options.length) select.selectedIndex = 0;
+  renderSelectedPageSummary();
+  setSummaryEditorMode("edit");
+}
+
 function openFinishDialog() {
   if (!appState.session) return;
+  const isPdfLesson = appState.session.reference_kind === "book" && appState.session.mode !== "assessment";
   const isBook = appState.session.reference_kind === "book";
-  $("endPositionLabel").classList.toggle("hidden", appState.session.mode === "assessment");
+  $("finishTitle").textContent = isPdfLesson ? "Review your reading record" : "What did you cover?";
+  $("finishIntro").textContent = isPdfLesson
+    ? "Confirm the pages the Coach scanned, assign their chapter and section, and review each summary before saving."
+    : "A quick record now makes your next lesson—and your dashboard—more useful.";
+  $("endPositionLabel").classList.toggle("hidden", appState.session.mode === "assessment" || isPdfLesson);
   $("endPositionLabel").firstChild.textContent = isBook ? "Ending PDF viewer page" : "Ending video time (MM:SS)";
   $("endPositionInput").value = appState.session.reference_kind === "book"
     ? String(appState.readerPage || appState.session.start_position || "")
     : appState.session.start_position || "";
   $("endPositionInput").placeholder = isBook ? "e.g. 48" : "e.g. 07:40";
-  $("endPositionInput").required = appState.session.mode !== "assessment";
+  $("endPositionInput").required = appState.session.mode !== "assessment" && !isPdfLesson;
   $("scoreWrap").classList.toggle("hidden", appState.session.mode !== "assessment");
   $("gradeNotesWrap").classList.toggle("hidden", appState.session.mode !== "assessment");
+  $("conceptsLabel").classList.toggle("hidden", isPdfLesson);
+  $("exerciseHeading").classList.toggle("hidden", isPdfLesson);
+  $("exerciseRows").classList.toggle("hidden", isPdfLesson);
+  $("pdfFinishSection").classList.toggle("hidden", !isPdfLesson);
   $("scoreInput").required = appState.session.mode === "assessment";
   $("conceptsInput").value = "";
   $("gradeNotesInput").value = "";
+  if (isPdfLesson) {
+    if (appState.pageRangesDraftSessionId !== appState.session.id) {
+      appState.pageRangesDraft = [];
+      appState.pageRangesDraftSessionId = appState.session.id;
+    }
+    renderFinishReadPages();
+    initializeChapterRanges();
+    initializePageSummaryEditor();
+  }
   $("exerciseRows").replaceChildren();
-  addExerciseRow();
+  if (!isPdfLesson) addExerciseRow();
   openModal($("finishDialog"));
 }
 
 async function saveFinish(event) {
   event.preventDefault();
   if (!appState.session) return;
-  const exercises = [...$("exerciseRows").querySelectorAll(".exercise-row")].map((row) => ({
+  const isPdfLesson = appState.session.reference_kind === "book" && appState.session.mode !== "assessment";
+  const pageRanges = isPdfLesson ? validateChapterRanges() : [];
+  if (isPdfLesson && !pageRanges) return;
+  const pageSummaries = isPdfLesson ? sortedPageReads().map((page) => ({
+    viewer_page: Number(page.viewer_page),
+    summary: page.summary,
+  })) : [];
+  if (isPdfLesson && pageSummaries.some((item) => !item.summary?.trim())) {
+    $("chapterRangeError").textContent = "Every scanned PDF page needs a non-empty summary.";
+    $("chapterRangeError").classList.remove("hidden");
+    setSummaryEditorMode("edit");
+    return;
+  }
+  const exercises = isPdfLesson ? [] : [...$("exerciseRows").querySelectorAll(".exercise-row")].map((row) => ({
     exercise_id: row.querySelector(".exercise-id").value,
     description: row.querySelector(".exercise-description").value,
     outcome: row.querySelector(".exercise-outcome").value,
@@ -1314,6 +1652,7 @@ async function saveFinish(event) {
     exercises,
     score: $("scoreInput").value,
     grade_notes: $("gradeNotesInput").value,
+    ...(isPdfLesson ? { page_ranges: pageRanges, page_summaries: pageSummaries } : {}),
   };
   await completeSession(payload);
 }
@@ -1329,6 +1668,8 @@ async function completeSession(payload) {
     $("sessionView").classList.add("hidden");
     $("dashboardView").classList.remove("hidden");
     await loadDashboard();
+    appState.pageRangesDraft = [];
+    appState.pageRangesDraftSessionId = null;
     toast(isPdfLesson ? "PDF lesson finished and logged." : "Session saved. Your book/video cursor is ready for next time.");
   } catch (error) {
     toast(error.message);
@@ -1380,8 +1721,20 @@ function showDashboard() {
 }
 
 function wireEvents() {
-  $("pdfFrame").addEventListener("load", () => bindPdfViewer("pdfFrame"));
-  $("previewPdfFrame").addEventListener("load", () => bindPdfViewer("previewPdfFrame"));
+  $("addChapterRange").addEventListener("click", () => {
+    addChapterRangeRow();
+    saveChapterRangeDraft();
+  });
+  $("summaryPageSelect").addEventListener("change", renderSelectedPageSummary);
+  $("pageSummaryEditor").addEventListener("input", renderPageSummaryPreview);
+  $("summaryEditTab").addEventListener("click", () => setSummaryEditorMode("edit"));
+  $("summaryPreviewTab").addEventListener("click", () => setSummaryEditorMode("preview"));
+  $("openCodexUsage").addEventListener("click", () => {
+    $("codexUsageDialog").showModal();
+    loadCodexUsage();
+  });
+  $("closeCodexUsage").addEventListener("click", () => $("codexUsageDialog").close());
+  $("refreshCodexUsage").addEventListener("click", loadCodexUsage);
   $("readPageWithCoach").addEventListener("change", (event) => {
     if (event.currentTarget.checked) markCurrentPageRead();
   });
@@ -1471,11 +1824,7 @@ function wireEvents() {
     if (appState.reference) openReferenceTab(appState.reference);
   });
   $("finishButton").addEventListener("click", () => {
-    if (appState.session?.reference_kind === "book" && appState.session.mode !== "assessment") {
-      completeSession({ end_position: "", concepts: "", exercises: [] });
-    } else {
-      openFinishDialog();
-    }
+    openFinishDialog();
   });
   $("cancelFinish").addEventListener("click", () => $("finishDialog").close());
   $("finishForm").addEventListener("submit", saveFinish);

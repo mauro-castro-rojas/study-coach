@@ -4,7 +4,28 @@ Study Room is a private, local browser app for self-paced lessons, a Codex-power
 Study Coach, a live timer, and durable learning records. It replaces the old
 fixed weekday rotation; it does not set a mandatory hour or session length.
 
-## Start and stop
+## Install, start, and stop
+
+The Python server uses only the standard library, so no `pip` install or
+requirements file is needed. The PDF reader and math renderer are browser
+packages managed with npm. Install Node.js 24 in WSL and install dependencies
+once after cloning or updating the repository:
+
+```bash
+nvm install
+nvm use
+nvm alias default 24
+npm ci
+```
+
+The `.nvmrc` file selects the Node version. `package.json` declares the direct
+packages, while `package-lock.json` pins their full dependency tree. npm stores
+downloaded library code in the ignored `node_modules/` directory. Do not copy
+those packages into `web/` or commit `node_modules/`.
+
+If nvm is not installed in WSL, follow the official [nvm installation
+instructions](https://github.com/nvm-sh/nvm#installing-and-updating). The
+project's [README](../README.md) includes the WSL setup commands.
 
 From WSL, run:
 
@@ -29,14 +50,14 @@ never pauses or ends the session. Practice tests are closed book.
 
 The Study Coach panel can be hidden to widen the reader and shown again at any
 time. The time card displays elapsed active-study time and a live local clock
-in `America/Bogota`. The locally bundled Mozilla PDF.js v6.4.299 reader renders
-the OneDrive-backed file in the page and keeps its built-in page controls (the
-upstream license is included at `web/pdfjs/LICENSE`). During a PDF lesson, mark
+in `America/Bogota`. The npm-installed Mozilla PDF.js reader renders the
+OneDrive-backed file in the page and keeps its built-in page controls. During a
+PDF lesson, mark
 a page as read after you finish it. Only that explicit action sends the current
 page image and extracted text to Codex. The app saves the PDF viewer page, the
-printed page label when readable, a concise summary, and the detected concepts
-to the open session as soon as the page is checked. Page changes alone are not
-sent. Page summaries are kept in the session record, not shown as chat messages.
+concise summary, and the detected concepts to the open session as soon as the
+page is checked. Page changes alone are not sent. Page summaries are kept in
+the session record, not shown as chat messages.
 The raw page image and extracted text are sent to Codex for that request; Study
 Room keeps the resulting summary and page metadata rather than a local copy of
 the page image.
@@ -46,7 +67,14 @@ conversation and records its printed identifier.
 The timer counts active study time and can be paused. A PDF lesson requires at
 least one page marked as read before **Finish & log** is available. Finishing
 automatically saves the checked pages, their summaries and concepts, book
-exercises, and exercises requested in the Coach conversation. The session
+exercises, and exercises requested in the Coach conversation. At finish, the
+learner confirms the scanned PDF pages, enters a chapter/section range, and can
+add more ranges if the reading crossed into another section. Page summaries can
+be edited as Markdown and previewed before saving. Formula notation in summaries
+uses TeX delimiters and is rendered by the npm-installed KaTeX library in the
+preview, session records, and Coach conversations. Chapter boundaries are not
+inferred automatically. Study records identify each summary with its chapter,
+section, and PDF viewer page; printed page labels are omitted. The session
 Markdown log is updated as pages are recorded and finalized when the session
 ends. The visible Coach conversation is saved separately with the session;
 internal page-capture instructions and summaries are not added to the chat.
@@ -160,6 +188,11 @@ as experimental; this is a personal app bound to loopback, not a hosted service.
 The Study Coach panel lets the learner choose an available text-and-image model
 and one of that model's supported reasoning efforts. The choice applies to the
 next chat response and PDF page read and is remembered in that browser.
+
+During a session, **Codex usage** opens an on-demand panel with the quota windows
+and token totals Codex reports for that Study Coach conversation. It loads only
+when opened or refreshed. Codex may omit a quota window or token totals, so the
+panel reports those as unavailable rather than estimating them.
 
 For temporary verification, each accepted Coach turn prints its thread ID, turn
 ID, requested model, and reasoning effort in the terminal running `./study`.

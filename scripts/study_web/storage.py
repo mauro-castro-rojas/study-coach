@@ -53,6 +53,7 @@ class StudyStore:
                     concepts TEXT NOT NULL DEFAULT '',
                     score REAL,
                     grade_notes TEXT NOT NULL DEFAULT '',
+                    page_ranges TEXT NOT NULL DEFAULT '[]',
                     codex_thread_id TEXT,
                     created_at TEXT NOT NULL
                 );
@@ -88,6 +89,11 @@ class StudyStore:
                     ON messages(session_id, id);
                 """
             )
+            session_columns = {
+                row["name"] for row in db.execute("PRAGMA table_info(sessions)").fetchall()
+            }
+            if "page_ranges" not in session_columns:
+                db.execute("ALTER TABLE sessions ADD COLUMN page_ranges TEXT NOT NULL DEFAULT '[]'")
         self._recover_open_sessions()
 
     def _now_utc(self) -> datetime:
@@ -514,7 +520,7 @@ class StudyStore:
                 """SELECT id, topic_id, reference_id, mode, status, started_at, ended_at,
                           active_since, heartbeat_at, elapsed_seconds, setup_seconds,
                           planned_seconds, sound_on_target, start_position, end_position,
-                          concepts, score, grade_notes, codex_thread_id, created_at
+                          concepts, score, grade_notes, page_ranges, codex_thread_id, created_at
                    FROM sessions WHERE id=?""",
                 (session_id,),
             ).fetchone()
@@ -552,6 +558,7 @@ class StudyStore:
         result["page_reads"] = [
             {**dict(item), "concepts": json.loads(item["concepts"])} for item in page_reads
         ]
+        result["page_ranges"] = json.loads(result["page_ranges"] or "[]")
         result.pop("active_since", None)
         result.pop("heartbeat_at", None)
         return result
@@ -565,6 +572,8 @@ class StudyStore:
         score: float | None = None,
         grade_notes: str = "",
         status: str = "completed",
+        page_ranges: list[dict[str, Any]] | None = None,
+        page_summaries: dict[int, str] | None = None,
     ) -> dict[str, Any]:
         if status not in {"completed", "interrupted"}:
             raise ValueError("Invalid final status.")
@@ -581,9 +590,23 @@ class StudyStore:
             self._add_elapsed(db, session_id, ended_at)
             db.execute(
                 """UPDATE sessions SET status=?, ended_at=?, end_position=?, concepts=?,
-                   score=?, grade_notes=? WHERE id=?""",
-                (status, ended_at, end_position, concepts.strip(), score, grade_notes.strip(), session_id),
+                   score=?, grade_notes=?, page_ranges=? WHERE id=?""",
+                (
+                    status,
+                    ended_at,
+                    end_position,
+                    concepts.strip(),
+                    score,
+                    grade_notes.strip(),
+                    json.dumps(page_ranges or [], ensure_ascii=False),
+                    session_id,
+                ),
             )
+            for viewer_page, summary in (page_summaries or {}).items():
+                db.execute(
+                    "UPDATE page_reads SET summary=? WHERE session_id=? AND viewer_page=?",
+                    (summary, session_id, viewer_page),
+                )
             for exercise in exercises:
                 exercise_id = exercise.get("exercise_id", "").strip()
                 description = exercise.get("description", "").strip()
@@ -657,9 +680,21 @@ class StudyStore:
         if session.get("page_reads"):
             content.extend(["", "## Pages read", ""])
             for page_read in session["page_reads"]:
-                page_title = f"PDF viewer page {page_read['viewer_page']}"
-                if page_read["printed_page"]:
-                    page_title += f" · printed page {page_read['printed_page']}"
+                viewer_page = int(page_read["viewer_page"])
+                page_range = next(
+                    (
+                        item
+                        for item in session.get("page_ranges", [])
+                        if int(item["start_page"]) <= viewer_page <= int(item["end_page"])
+                    ),
+                    None,
+                )
+                page_title = f"PDF page {viewer_page}"
+                if page_range:
+                    page_title = (
+                        f"Chapter {page_range['chapter']} · Section {page_range['section']} "
+                        f"— PDF page {viewer_page}"
+                    )
                 content.extend([f"### {page_title}", "", page_read["summary"].strip(), ""])
         path.write_text("\n".join(content) + "\n", encoding="utf-8")
         return path
