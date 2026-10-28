@@ -33,8 +33,11 @@ npm ci
 `package.json` lists the direct npm dependencies; `package-lock.json` records
 their exact resolved versions. npm downloads their code into the git ignored
 `node_modules/` directory. The app uses `@missing-elements/pdfjs-viewer` for
-the PDF.js reader and KaTeX for math; `pdfjs-dist` is installed transitively by
-the viewer package. That directory is never committed.
+the PDF.js reader, KaTeX for math, and CodeMirror 6 for Markdown note editing.
+`pdfjs-dist` and CodeMirror's Lezer parser packages are installed transitively.
+These libraries are served from `node_modules/`; no dependency source is copied
+into or committed with the app. Run `npm ci` again after cloning the repo or
+whenever `package-lock.json` changes. That directory is never committed.
 
 ## Run
 

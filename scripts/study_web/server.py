@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import mimetypes
 import queue
@@ -500,6 +502,12 @@ class StudyHandler(BaseHTTPRequestHandler):
             self._static(
                 path.removeprefix("/vendor/katex/"),
                 asset_root=self.app.root / "node_modules" / "katex" / "dist",
+                cache_asset=True,
+            )
+        elif path.startswith("/codemirror/"):
+            self._static(
+                path.removeprefix("/codemirror/"),
+                asset_root=self.app.root / "node_modules",
                 cache_asset=True,
             )
         elif path in {"/app.js", "/app.css"}:
@@ -1098,8 +1106,18 @@ class StudyHandler(BaseHTTPRequestHandler):
             self._json(404, {"error": "Dashboard asset not found."})
             return
         body = path.read_bytes()
+        import_map_hash = ""
         if filename == "index.html":
             body = body.replace(b"__STUDY_TIMEZONE__", self.app.plan["timezone"].encode())
+            import_map = re.search(
+                rb'<script\s+type="importmap">(.*?)</script>',
+                body,
+                flags=re.DOTALL,
+            )
+            if import_map:
+                digest = hashlib.sha256(import_map.group(1)).digest()
+                digest_text = base64.b64encode(digest).decode("ascii")
+                import_map_hash = f" 'sha256-{digest_text}'"
         self.send_response(200)
         if content_type is None:
             content_type = {
@@ -1120,7 +1138,14 @@ class StudyHandler(BaseHTTPRequestHandler):
         )
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' blob: data:; worker-src 'self' blob:; frame-src 'self'")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'self'; "
+            f"script-src 'self' 'wasm-unsafe-eval'{import_map_hash}; "
+            "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
+            "font-src 'self' data:; connect-src 'self' blob: data:; "
+            "worker-src 'self' blob:; frame-src 'self'",
+        )
         self.end_headers()
         self.wfile.write(body)
 

@@ -1,3 +1,9 @@
+import { EditorState } from "@codemirror/state";
+import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import { markdown } from "@codemirror/lang-markdown";
+import { defaultHighlightStyle, indentUnit, syntaxHighlighting } from "@codemirror/language";
+import { drawSelection, EditorView, highlightActiveLine, keymap, lineNumbers } from "@codemirror/view";
+
 const appState = {
   config: null,
   dashboard: null,
@@ -14,6 +20,7 @@ const appState = {
   pageRangesDraft: [],
   pageRangesDraftSessionId: null,
   summaryEditorMode: "edit",
+  summaryEditorView: null,
   pageSummaryOriginal: "",
   pageSummaryEditingPage: null,
   pageReadPending: false,
@@ -1216,7 +1223,7 @@ async function markCurrentPageRead() {
       appState.session.page_reads = appState.pageReads;
       updatePageReadControl();
       toast(`p. ${markedPage.pdf_page} marked as read.`);
-      openPageSummaryDialog(markedPage.pdf_page);
+      openPageSummaryWorkspace(markedPage.pdf_page);
       return;
     }
     const page = await viewer.pdfDocument.getPage(pageNumber);
@@ -1285,7 +1292,7 @@ async function markCurrentPageRead() {
       }
     }
     if (!recorded) throw new Error("Could not save this page. Please try again.");
-    if (newlyRecordedPage) openPageSummaryDialog(newlyRecordedPage);
+    if (newlyRecordedPage) openPageSummaryWorkspace(newlyRecordedPage);
   } catch (error) {
     control.checked = false;
     toast(error.message);
@@ -1312,7 +1319,9 @@ function showSession(session, messages = []) {
   }
   $("timerCard").classList.remove("target-reached");
   $("targetAlert").classList.add("hidden");
+  $("pageSummaryWorkspace").classList.add("hidden");
   $("appShell").classList.add("session-expanded");
+  $("studyWorkspace").classList.remove("summary-editing");
   $("appShell").classList.toggle("manual-session", manualMode);
   appState.reference = appState.config.topics
     .find((topic) => topic.id === session.topic_id)?.references
@@ -1616,18 +1625,30 @@ function validateChapterRanges() {
 function renderSelectedPageSummary() {
   const page = appState.pageReads.find((item) => Number(item.pdf_page) === Number($("summaryPageSelect").value));
   appState.pageSummaryEditingPage = page?.pdf_page ?? null;
-  $("pageSummaryEditor").value = page?.summary || "";
+  if (appState.summaryEditorView) {
+    appState.summaryEditorView.dispatch({
+      changes: {
+        from: 0,
+        to: appState.summaryEditorView.state.doc.length,
+        insert: page?.summary || "",
+      },
+    });
+  }
   appState.pageSummaryOriginal = page?.summary || "";
   $("pageSummarySaveStatus").textContent = "";
   $("pageSummarySaveStatus").classList.remove("summary-save-error");
   renderPageSummaryPreview();
 }
 
+function summaryEditorText() {
+  return appState.summaryEditorView?.state.doc.toString() || "";
+}
+
 function renderPageSummaryPreview() {
-  const editor = $("pageSummaryEditor");
   const page = appState.pageReads.find((item) => Number(item.pdf_page) === Number($("summaryPageSelect").value));
-  if (page) page.summary = editor.value;
-  $("pageSummaryPreview").innerHTML = renderMarkdown(editor.value);
+  const markdownText = summaryEditorText();
+  if (page) page.summary = markdownText;
+  $("pageSummaryPreview").innerHTML = renderMarkdown(markdownText);
 }
 
 function setSummaryEditorMode(mode) {
@@ -1639,10 +1660,79 @@ function setSummaryEditorMode(mode) {
   $("summaryPreviewTab").classList.toggle("selected", isPreview);
   $("summaryEditTab").setAttribute("aria-selected", String(!isPreview));
   $("summaryPreviewTab").setAttribute("aria-selected", String(isPreview));
-  if (isPreview) renderPageSummaryPreview();
+  if (isPreview) {
+    renderPageSummaryPreview();
+  } else {
+    requestAnimationFrame(() => appState.summaryEditorView?.requestMeasure());
+    appState.summaryEditorView?.focus();
+  }
 }
 
-function openPageSummaryDialog(viewerPage) {
+function initializeSummaryEditor() {
+  if (appState.summaryEditorView) return;
+  const theme = EditorView.theme({
+    "&": {
+      height: "100%",
+      fontSize: "12px",
+    },
+    ".cm-scroller": {
+      overflow: "auto",
+      fontFamily: '"DM Mono", monospace',
+    },
+    ".cm-content": {
+      padding: "13px 14px",
+    },
+    ".cm-gutters": {
+      borderRight: "1px solid #e3eae3",
+      backgroundColor: "#f7f9f7",
+      color: "#87948c",
+    },
+    ".cm-activeLineGutter": {
+      backgroundColor: "#eaf1eb",
+    },
+    ".cm-activeLine": {
+      backgroundColor: "#f8faf8",
+    },
+  });
+  appState.summaryEditorView = new EditorView({
+    state: EditorState.create({
+      doc: "",
+      extensions: [
+        lineNumbers(),
+        history(),
+        drawSelection(),
+        highlightActiveLine(),
+        markdown(),
+        syntaxHighlighting(defaultHighlightStyle),
+        indentUnit.of("  "),
+        EditorView.lineWrapping,
+        keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
+        EditorView.domEventHandlers({
+          paste(event, view) {
+            const hasImage = [...(event.clipboardData?.items || [])]
+              .some((item) => item.type.startsWith("image/"));
+            if (!hasImage) return false;
+            pastePageSummaryImage(event, view);
+            return true;
+          },
+        }),
+        EditorView.updateListener.of((update) => {
+          if (update.docChanged) renderPageSummaryPreview();
+        }),
+        theme,
+      ],
+    }),
+    parent: $("pageSummaryEditor"),
+  });
+}
+
+function closePageSummaryWorkspace() {
+  $("pageSummaryWorkspace").classList.add("hidden");
+  $("studyWorkspace").classList.remove("summary-editing");
+}
+
+function openPageSummaryWorkspace(viewerPage) {
+  if ($("finishDialog").open) $("finishDialog").close();
   const select = $("summaryPageSelect");
   select.replaceChildren(...sortedPageReads().map((page) => {
     const option = new Option(`p. ${page.pdf_page}`, String(page.pdf_page));
@@ -1650,15 +1740,21 @@ function openPageSummaryDialog(viewerPage) {
   }));
   const index = [...select.options].findIndex((option) => Number(option.value) === Number(viewerPage));
   if (index >= 0) select.selectedIndex = index;
+  initializeSummaryEditor();
   renderSelectedPageSummary();
   setSummaryEditorMode("edit");
-  openModal($("pageSummaryDialog"));
+  $("pageSummaryWorkspace").classList.remove("hidden");
+  $("studyWorkspace").classList.add("summary-editing");
+  requestAnimationFrame(() => {
+    appState.summaryEditorView?.requestMeasure();
+    appState.summaryEditorView?.focus();
+  });
 }
 
 async function savePageSummary() {
   const page = appState.pageReads.find((item) => Number(item.pdf_page) === Number(appState.pageSummaryEditingPage));
   if (!page) return false;
-  const summary = $("pageSummaryEditor").value.trim();
+  const summary = summaryEditorText().trim();
   if (!summary) {
     $("pageSummarySaveStatus").textContent = "Page notes cannot be empty.";
     $("pageSummarySaveStatus").classList.add("summary-save-error");
@@ -1677,7 +1773,13 @@ async function savePageSummary() {
     page.summary = result.page.summary;
     page.images = result.page.images || [];
     appState.pageSummaryOriginal = page.summary;
-    $("pageSummaryEditor").value = page.summary;
+    appState.summaryEditorView.dispatch({
+      changes: {
+        from: 0,
+        to: appState.summaryEditorView.state.doc.length,
+        insert: page.summary,
+      },
+    });
     renderPageSummaryPreview();
     return true;
   } catch (error) {
@@ -1713,18 +1815,18 @@ async function pastedImageAsPng(file) {
   });
 }
 
-async function pastePageSummaryImage(event) {
+async function pastePageSummaryImage(event, view) {
   const imageItem = [...(event.clipboardData?.items || [])]
     .find((item) => item.type.startsWith("image/"));
   const file = imageItem?.getAsFile();
   if (!file) return;
   event.preventDefault();
-  const editor = event.currentTarget;
-  const start = editor.selectionStart;
-  const end = editor.selectionEnd;
+  const selection = view.state.selection.main;
+  const start = selection.from;
+  const end = selection.to;
   const page = appState.pageReads.find((item) => Number(item.pdf_page) === Number(appState.pageSummaryEditingPage));
   if (!page || !appState.session) return;
-  editor.disabled = true;
+  view.contentDOM.setAttribute("contenteditable", "false");
   $("pageSummarySaveStatus").textContent = "Adding screenshot…";
   $("pageSummarySaveStatus").classList.remove("summary-save-error");
   try {
@@ -1738,15 +1840,18 @@ async function pastePageSummaryImage(event) {
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.error || `Could not save the image (${response.status}).`);
     const imagePath = `../attachments/${appState.session.id}/${result.image.id}.png`;
-    const before = editor.value.slice(0, start);
-    const after = editor.value.slice(end);
+    const editorText = view.state.doc.toString();
+    const before = editorText.slice(0, start);
+    const after = editorText.slice(end);
     const prefix = before && !before.endsWith("\n") ? "\n\n" : "";
     const suffix = after && !after.startsWith("\n") ? "\n\n" : "";
     const markdown = `![Screenshot for p. ${page.pdf_page}](${imagePath})`;
     const insertion = `${prefix}${markdown}${suffix}`;
-    editor.value = `${before}${insertion}${after}`;
     const cursor = before.length + insertion.length;
-    editor.setSelectionRange(cursor, cursor);
+    view.dispatch({
+      changes: { from: start, to: end, insert: insertion },
+      selection: { anchor: cursor },
+    });
     page.images ||= [];
     page.images.push(result.image);
     renderPageSummaryPreview();
@@ -1755,8 +1860,8 @@ async function pastePageSummaryImage(event) {
     $("pageSummarySaveStatus").textContent = `Could not add screenshot: ${error.message}`;
     $("pageSummarySaveStatus").classList.add("summary-save-error");
   } finally {
-    editor.disabled = false;
-    editor.focus();
+    view.contentDOM.setAttribute("contenteditable", "true");
+    view.focus();
   }
 }
 
@@ -1908,7 +2013,7 @@ function wireEvents() {
   });
   $("summaryPageSelect").addEventListener("change", async () => {
     const nextPage = Number($("summaryPageSelect").value);
-    if ($("pageSummaryEditor").value.trim() !== appState.pageSummaryOriginal.trim() && !(await savePageSummary())) {
+    if (summaryEditorText().trim() !== appState.pageSummaryOriginal.trim() && !(await savePageSummary())) {
       $("summaryPageSelect").value = String(appState.pageSummaryEditingPage);
       return;
     }
@@ -1916,24 +2021,16 @@ function wireEvents() {
     if (!Number.isNaN(nextPage)) $("summaryPageSelect").value = String(nextPage);
   });
   $("savePageSummary").addEventListener("click", async () => {
-    if (await savePageSummary()) $("pageSummaryDialog").close();
+    if (await savePageSummary()) closePageSummaryWorkspace();
   });
   $("reviewSummariesButton").addEventListener("click", () => {
     const firstPage = sortedPageReads()[0];
-    if (firstPage) openPageSummaryDialog(firstPage.pdf_page);
+    if (firstPage) openPageSummaryWorkspace(firstPage.pdf_page);
   });
   $("closePageSummary").addEventListener("click", async () => {
-    const saved = $("pageSummaryEditor").value.trim() === appState.pageSummaryOriginal.trim() || await savePageSummary();
-    if (saved) $("pageSummaryDialog").close();
+    const saved = summaryEditorText().trim() === appState.pageSummaryOriginal.trim() || await savePageSummary();
+    if (saved) closePageSummaryWorkspace();
   });
-  $("pageSummaryDialog").addEventListener("cancel", (event) => {
-    if ($("pageSummaryEditor").value.trim() !== appState.pageSummaryOriginal.trim()) {
-      event.preventDefault();
-      toast("Save your page notes before closing.");
-    }
-  });
-  $("pageSummaryEditor").addEventListener("input", renderPageSummaryPreview);
-  $("pageSummaryEditor").addEventListener("paste", pastePageSummaryImage);
   $("summaryEditTab").addEventListener("click", () => setSummaryEditorMode("edit"));
   $("summaryPreviewTab").addEventListener("click", () => setSummaryEditorMode("preview"));
   $("openCodexUsage").addEventListener("click", () => {

@@ -8,9 +8,36 @@
   <title>Study Room</title>
   <link rel="stylesheet" href="/vendor/katex/katex.min.css">
   <link rel="stylesheet" href="/app.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "@codemirror/state": "/codemirror/@codemirror/state/dist/index.js",
+        "@codemirror/view": "/codemirror/@codemirror/view/dist/index.js",
+        "@codemirror/commands": "/codemirror/@codemirror/commands/dist/index.js",
+        "@codemirror/language": "/codemirror/@codemirror/language/dist/index.js",
+        "@codemirror/lang-markdown": "/codemirror/@codemirror/lang-markdown/dist/index.js",
+        "@codemirror/streamparser": "/codemirror/@codemirror/streamparser/dist/index.js",
+        "@codemirror/lang-html": "/codemirror/@codemirror/lang-html/dist/index.js",
+        "@codemirror/lang-javascript": "/codemirror/@codemirror/lang-javascript/dist/index.js",
+        "@codemirror/lang-css": "/codemirror/@codemirror/lang-css/dist/index.js",
+        "@codemirror/autocomplete": "/codemirror/@codemirror/autocomplete/dist/index.js",
+        "@lezer/common": "/codemirror/@lezer/common/dist/index.js",
+        "@lezer/highlight": "/codemirror/@lezer/highlight/dist/index.js",
+        "@lezer/markdown": "/codemirror/@lezer/markdown/dist/index.js",
+        "@lezer/lr": "/codemirror/@lezer/lr/dist/index.js",
+        "@lezer/javascript": "/codemirror/@lezer/javascript/dist/index.js",
+        "@lezer/css": "/codemirror/@lezer/css/dist/index.js",
+        "@lezer/html": "/codemirror/@lezer/html/dist/index.js",
+        "@marijn/find-cluster-break": "/codemirror/@marijn/find-cluster-break/src/index.js",
+        "style-mod": "/codemirror/style-mod/src/style-mod.js",
+        "crelt": "/codemirror/crelt/index.js",
+        "w3c-keyname": "/codemirror/w3c-keyname/index.js"
+      }
+    }
+  </script>
   <script type="module" src="/pdfjs/pdfjs-viewer-element.js"></script>
   <script defer src="/vendor/katex/katex.min.js"></script>
-  <script defer src="/app.js"></script>
+  <script type="module" src="/app.js"></script>
 </head>
 <body>
   <div id="appShell" class="app-shell">
@@ -122,6 +149,21 @@
               <p id="timerFootnote" class="timer-footnote">Only active study time is counted. Pause whenever you step away.</p>
             </section>
             <div class="position-card"><div><span class="position-icon">⌖</span><span><small>STARTING POINT</small><strong id="sessionStartPosition">—</strong></span></div></div>
+            <section id="pageSummaryWorkspace" class="page-summary-workspace hidden" aria-label="Edit page summary">
+              <div class="summary-workspace-heading">
+                <div><p class="eyebrow">YOUR READING NOTES</p><h2 id="pageSummaryTitle">Edit page summary</h2></div>
+                <label class="summary-page-picker">Page<select id="summaryPageSelect" aria-label="Choose a scanned PDF page summary"></select></label>
+              </div>
+              <p class="dialog-intro">Edit this page’s Markdown notes. Paste a screenshot at the cursor to add it to the summary.</p>
+              <div class="summary-editor-tabs" role="tablist" aria-label="Summary editor view">
+                <button id="summaryEditTab" class="summary-editor-tab selected" type="button" role="tab" aria-selected="true">Markdown</button>
+                <button id="summaryPreviewTab" class="summary-editor-tab" type="button" role="tab" aria-selected="false">Preview</button>
+              </div>
+              <div id="pageSummaryEditor" class="page-summary-source" aria-label="Edit page summary as Markdown"></div>
+              <div id="pageSummaryPreview" class="markdown-document page-summary-preview hidden" role="tabpanel"></div>
+              <p id="pageSummarySaveStatus" class="field-hint" role="alert" aria-live="assertive"></p>
+              <div class="setup-actions summary-workspace-actions"><button id="closePageSummary" class="button button-quiet" type="button">Close</button><button id="savePageSummary" class="button button-primary" type="button">Save notes</button></div>
+            </section>
             <section class="coach-panel" aria-label="Study Coach conversation">
               <div class="coach-header"><div class="coach-avatar">✳</div><div><strong>Study Coach</strong><small id="coachStatus">Ready to learn with you</small></div><span class="coach-header-spacer"></span><span class="online-indicator" title="Local Codex connection"></span></div>
               <div class="coach-settings" aria-label="Study Coach model settings">
@@ -239,21 +281,6 @@
       <label id="gradeNotesWrap" class="hidden">Grade notes<textarea id="gradeNotesInput" rows="2" placeholder="Evidence, strengths, and what to review"></textarea></label>
       <div class="setup-actions"><button id="cancelFinish" class="button button-quiet" type="button">Keep studying</button><button id="saveFinish" class="button button-primary" type="submit">Save session</button></div>
     </form>
-  </dialog>
-
-  <dialog id="pageSummaryDialog" class="dialog-card page-summary-dialog" aria-labelledby="pageSummaryTitle">
-    <p class="eyebrow">YOUR READING NOTES</p>
-    <h2 id="pageSummaryTitle">Edit page summary</h2>
-    <p class="dialog-intro">Edit this page’s Markdown notes. Paste a screenshot at the cursor to add it to the summary.</p>
-    <label class="summary-page-picker">Page to review<select id="summaryPageSelect" aria-label="Choose a scanned PDF page summary"></select></label>
-    <div class="summary-editor-tabs" role="tablist" aria-label="Summary editor view">
-      <button id="summaryEditTab" class="summary-editor-tab selected" type="button" role="tab" aria-selected="true">Markdown</button>
-      <button id="summaryPreviewTab" class="summary-editor-tab" type="button" role="tab" aria-selected="false">Preview</button>
-    </div>
-    <textarea id="pageSummaryEditor" class="page-summary-source" rows="12" aria-label="Edit page summary as Markdown"></textarea>
-    <div id="pageSummaryPreview" class="markdown-document page-summary-preview hidden" role="tabpanel"></div>
-    <p id="pageSummarySaveStatus" class="field-hint" role="alert" aria-live="assertive"></p>
-    <div class="setup-actions"><button id="closePageSummary" class="button button-quiet" type="button">Close</button><button id="savePageSummary" class="button button-primary" type="button">Save notes</button></div>
   </dialog>
 
   <div id="toast" class="toast" popover="manual" role="status" aria-live="polite"></div>

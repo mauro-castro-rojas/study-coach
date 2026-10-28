@@ -45,10 +45,17 @@ def main() -> int:
         pdfjs_dist / "paper-and-ink.css",
         ROOT / "node_modules" / "katex" / "dist" / "katex.min.js",
         ROOT / "node_modules" / "katex" / "dist" / "katex.min.css",
+        ROOT / "node_modules" / "@codemirror" / "state" / "dist" / "index.js",
+        ROOT / "node_modules" / "@codemirror" / "view" / "dist" / "index.js",
+        ROOT / "node_modules" / "@codemirror" / "commands" / "dist" / "index.js",
+        ROOT / "node_modules" / "@codemirror" / "language" / "dist" / "index.js",
+        ROOT / "node_modules" / "@codemirror" / "lang-markdown" / "dist" / "index.js",
     )
     missing_assets = [path for path in required_assets if not path.is_file()]
     if missing_assets:
         print("Study Room browser dependencies are missing. Run `npm ci` from the project root.", file=sys.stderr)
+        for path in missing_assets:
+            print(f"  Missing: {path.relative_to(ROOT)}", file=sys.stderr)
         print("See README.md for Node.js setup instructions.", file=sys.stderr)
         return 1
 

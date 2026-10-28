@@ -1929,6 +1929,10 @@ button:disabled {
   gap: 20px;
 }
 
+.session-expanded .study-workspace.summary-editing {
+  grid-template-columns: minmax(0, 1.55fr) minmax(420px, 1fr);
+}
+
 @media (max-width:1200px) {
   .app-shell.session-expanded {
     padding-left: 24px;
@@ -1939,6 +1943,10 @@ button:disabled {
     grid-template-columns: minmax(0,1.4fr) minmax(300px,.9fr);
     gap: 14px;
   }
+
+  .session-expanded .study-workspace.summary-editing {
+    grid-template-columns: minmax(0, 1.25fr) minmax(360px, 1fr);
+  }
 }
 
 @media (max-width:820px) {
@@ -1948,6 +1956,10 @@ button:disabled {
   }
 
   .session-expanded .study-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .session-expanded .study-workspace.summary-editing {
     grid-template-columns: 1fr;
   }
 }
@@ -2999,17 +3011,63 @@ button:disabled {
   background: #fbfcfa;
 }
 
-.page-summary-dialog {
-  width: min(860px,calc(100vw - 32px));
-  max-height: min(92vh,1000px);
-  overflow-y: auto;
+.summary-editing {
+  grid-template-columns: minmax(0, 1.55fr) minmax(420px, 1fr);
+  align-items: stretch;
 }
 
-.page-summary-dialog .page-summary-source,
-.page-summary-dialog .page-summary-preview {
-  min-height: 280px;
-  max-height: 48vh;
-  overflow-y: auto;
+.summary-editing .study-panel .coach-panel {
+  display: none;
+}
+
+.page-summary-workspace {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  padding: 16px;
+  border: 1px solid #dce6dd;
+  border-radius: 13px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(41, 61, 47, .06);
+}
+
+.summary-workspace-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.summary-workspace-heading .eyebrow {
+  margin-bottom: 4px;
+}
+
+.summary-workspace-heading h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 19px;
+}
+
+.summary-workspace-heading .summary-page-picker {
+  width: 112px;
+  flex-shrink: 0;
+}
+
+.summary-workspace-heading .summary-page-picker select {
+  margin-top: 4px;
+}
+
+.page-summary-workspace .dialog-intro {
+  margin: 12px 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.page-summary-workspace .summary-editor-tabs {
+  flex-shrink: 0;
+  margin-top: 0;
 }
 
 .markdown-document .study-note-image {
@@ -3192,16 +3250,47 @@ button:disabled {
 
 .page-summary-source,
 .page-summary-preview {
-  min-height: 230px;
+  min-height: 280px;
   margin: 0 !important;
-  padding: 13px 14px !important;
   border: 1px solid #e3eae3 !important;
   border-radius: 0 0 9px 9px !important;
   background: #fff !important;
   color: #314137;
-  font-family: "DM Mono", monospace !important;
-  font-size: 11px !important;
-  line-height: 1.65 !important;
+  font-family: "DM Mono", monospace;
+  font-size: 11px;
+  line-height: 1.65;
+}
+
+.page-summary-source {
+  height: clamp(320px, 46vh, 680px);
+  min-height: 280px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.page-summary-source:focus-within {
+  border-color: #9eb9a2 !important;
+  box-shadow: 0 0 0 3px rgba(92, 130, 99, .1);
+}
+
+.page-summary-source .cm-editor {
+  height: 100%;
+  color: #314137;
+  background: #fff;
+  font-family: "DM Mono", monospace;
+  font-size: 11px;
+  line-height: 1.65;
+}
+
+.page-summary-source .cm-gutters {
+  user-select: none;
+}
+
+.page-summary-preview {
+  max-height: 62vh;
+  padding: 13px 14px !important;
+  overflow: auto;
+  font-family: "DM Sans", sans-serif !important;
 }
 
 .page-summary-preview {
@@ -3234,6 +3323,38 @@ button:disabled {
 
   .remove-chapter-range {
     justify-self: end;
+  }
+}
+
+@media (max-width: 1050px) {
+  .summary-editing {
+    grid-template-columns: minmax(0, 1.25fr) minmax(360px, 1fr);
+  }
+}
+
+@media (max-width: 820px) {
+  .summary-editing {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .page-summary-workspace {
+    min-height: 560px;
+  }
+
+  .page-summary-source {
+    height: 45vh;
+    min-height: 260px;
+  }
+}
+
+@media (max-width: 480px) {
+  .page-summary-workspace {
+    min-height: 520px;
+    padding: 12px;
+  }
+
+  .summary-workspace-heading h2 {
+    font-size: 17px;
   }
 }
 
