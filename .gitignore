@@ -28,6 +28,8 @@ __pycache__/
 /records/runtime/
 /records/sessions/
 /records/weekly/
+# User-pasted page images (lossless PNG attachments).
+/records/attachments/**/*.png
 
 # Topic materials are learner-specific; topics/README.md documents the layout.
 /topics/*

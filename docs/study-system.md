@@ -58,9 +58,14 @@ page image and extracted text to Codex. The app saves the PDF viewer page, the
 concise summary, and the detected concepts to the open session as soon as the
 page is checked. Page changes alone are not sent. Page summaries are kept in
 the session record, not shown as chat messages.
-The raw page image and extracted text are sent to Codex for that request; Study
-Room keeps the resulting summary and page metadata rather than a local copy of
-the page image.
+The raw PDF page image and extracted text are sent to Codex for that request;
+Study Room does not keep a local copy of that scanned page image. Learners can
+also paste their own screenshots into a page summary in either Study Coach or
+manual mode. Those user-added images are saved as lossless PNG files under
+`records/attachments/`, with image metadata in SQLite linked to the page summary
+by its session ID and PDF page number. Markdown image links keep the screenshots
+in place in the page summary and Study records. Removing an image link and
+saving the summary removes that attachment.
 If the page contains an actual book exercise, the Coach presents it in the
 conversation and records its printed identifier.
 
@@ -94,12 +99,18 @@ The current version does not launch or enforce that ten-part sequence as one
 automatic two-hour exam.
 
 The local SQLite database at `records/study.sqlite3` is the structured source
-for sessions, page summaries, chat history, progress, and dashboard totals. The
-app writes or updates a readable Markdown export for each session under
+for sessions, page summaries, chat history, and dashboard totals. PDF and video
+resume positions are kept in `records/progress.json`. The app writes or updates
+a readable Markdown export for each session under
 `records/sessions/` as pages are confirmed and when the session finishes, and
 regenerates a weekly summary under `records/weekly/`. Existing session exports
 without the app's generated marker are preserved; the app writes a separate
 dashboard summary rather than overwriting them.
+Each page summary is keyed by `(session_id, pdf_page)` in `page_reads`. Multiple
+images can be attached to that summary through `page_images`, which stores their
+relative file paths and metadata; image bytes remain under
+`records/attachments/`, outside SQLite. This records directory is private local
+data and is excluded from Git.
 
 Open **Study records** on the dashboard to browse session logs, Study Coach
 conversations, and weekly summaries. Tabs separate the record types; session
@@ -114,8 +125,9 @@ than one day.
 To clear the study history from the portal, open **Study records**, select
 **Clear study records**, review the summary, and confirm. The action removes
 all saved sessions and their Coach conversations and exercise results, along with
-Study Room generated session logs and weekly summaries. It keeps saved
-PDF/video resume positions and manually written Markdown files. The app blocks
+their pasted page screenshots and the Study Room generated session logs and
+weekly summaries. It keeps saved PDF/video resume positions and manually written
+Markdown files. The app blocks
 the action while a session is active or paused; resume and finish that session
 first.
 

@@ -75,12 +75,12 @@ class StudyStore:
                 );
                 CREATE TABLE IF NOT EXISTS page_reads (
                     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-                    viewer_page INTEGER NOT NULL,
+                    pdf_page INTEGER NOT NULL,
                     printed_page TEXT NOT NULL DEFAULT '',
                     summary TEXT NOT NULL,
                     concepts TEXT NOT NULL DEFAULT '[]',
                     created_at TEXT NOT NULL,
-                    PRIMARY KEY(session_id, viewer_page)
+                    PRIMARY KEY(session_id, pdf_page)
                 );
                 CREATE INDEX IF NOT EXISTS sessions_topic_idx
                     ON sessions(topic_id, reference_id, started_at);
@@ -88,6 +88,30 @@ class StudyStore:
                     ON exercises(session_id);
                 CREATE INDEX IF NOT EXISTS messages_session_idx
                     ON messages(session_id, id);
+                """
+            )
+            page_columns = {
+                row["name"] for row in db.execute("PRAGMA table_info(page_reads)").fetchall()
+            }
+            if "viewer_page" in page_columns and "pdf_page" not in page_columns:
+                db.execute("ALTER TABLE page_reads RENAME COLUMN viewer_page TO pdf_page")
+            db.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS page_images (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    pdf_page INTEGER NOT NULL,
+                    relative_path TEXT NOT NULL UNIQUE,
+                    mime_type TEXT NOT NULL CHECK(mime_type = 'image/png'),
+                    byte_size INTEGER NOT NULL,
+                    width INTEGER NOT NULL,
+                    height INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(session_id, pdf_page)
+                        REFERENCES page_reads(session_id, pdf_page) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS page_images_summary_idx
+                    ON page_images(session_id, pdf_page, created_at);
                 """
             )
             session_columns = {
@@ -366,7 +390,7 @@ class StudyStore:
     def save_page_read(
         self,
         session_id: str,
-        viewer_page: int,
+        pdf_page: int,
         printed_page: str,
         summary: str,
         concepts: list[str],
@@ -379,8 +403,8 @@ class StudyStore:
             if not session or session["status"] not in {"active", "paused"}:
                 raise ValueError("This session is already finished.")
             existing = db.execute(
-                "SELECT * FROM page_reads WHERE session_id=? AND viewer_page=?",
-                (session_id, viewer_page),
+                "SELECT * FROM page_reads WHERE session_id=? AND pdf_page=?",
+                (session_id, pdf_page),
             ).fetchone()
             if existing:
                 row = dict(existing)
@@ -388,9 +412,9 @@ class StudyStore:
                 return row, False
             db.execute(
                 """INSERT INTO page_reads
-                   (session_id, viewer_page, printed_page, summary, concepts, created_at)
+                   (session_id, pdf_page, printed_page, summary, concepts, created_at)
                    VALUES (?, ?, ?, ?, ?, ?)""",
-                (session_id, viewer_page, printed_page, summary, json.dumps(concepts), self._now_text()),
+                (session_id, pdf_page, printed_page, summary, json.dumps(concepts), self._now_text()),
             )
             for exercise in book_exercises:
                 db.execute(
@@ -401,19 +425,28 @@ class StudyStore:
                         session_id,
                         exercise["exercise_id"],
                         exercise["prompt"],
-                        f"Book exercise from PDF viewer page {viewer_page}.",
+                        f"Book exercise from PDF viewer page {pdf_page}.",
                     ),
                 )
             saved = db.execute(
-                "SELECT * FROM page_reads WHERE session_id=? AND viewer_page=?",
-                (session_id, viewer_page),
+                "SELECT * FROM page_reads WHERE session_id=? AND pdf_page=?",
+                (session_id, pdf_page),
             ).fetchone()
         row = dict(saved)
         row["concepts"] = json.loads(row["concepts"])
         self._write_session_markdown(self.session(session_id))
         return row, True
 
-    def update_page_summary(self, session_id: str, viewer_page: int, summary: str) -> dict[str, Any]:
+    def update_page_summary(self, session_id: str, pdf_page: int, summary: str) -> dict[str, Any]:
+        attachment_paths: list[str] = []
+        attachment_ids = set(re.findall(
+            r"!\[[^\]]*\]\(\.\./attachments/([a-f0-9]{32})/([a-f0-9]{32})\.png\)",
+            summary,
+        ))
+        referenced_ids = {
+            image_id for attachment_session, image_id in attachment_ids
+            if attachment_session == session_id
+        }
         with self._connect() as db:
             session = db.execute(
                 "SELECT status FROM sessions WHERE id=?", (session_id,)
@@ -421,19 +454,135 @@ class StudyStore:
             if not session or session["status"] not in {"active", "paused"}:
                 raise ValueError("This session is already finished.")
             updated = db.execute(
-                "UPDATE page_reads SET summary=? WHERE session_id=? AND viewer_page=?",
-                (summary, session_id, viewer_page),
+                "UPDATE page_reads SET summary=? WHERE session_id=? AND pdf_page=?",
+                (summary, session_id, pdf_page),
             )
             if updated.rowcount != 1:
                 raise ValueError("That page has not been marked as read.")
+            images = db.execute(
+                "SELECT id, relative_path FROM page_images WHERE session_id=? AND pdf_page=?",
+                (session_id, pdf_page),
+            ).fetchall()
+            for image in images:
+                if image["id"] not in referenced_ids:
+                    attachment_paths.append(image["relative_path"])
+                    db.execute("DELETE FROM page_images WHERE id=?", (image["id"],))
             row = db.execute(
-                "SELECT * FROM page_reads WHERE session_id=? AND viewer_page=?",
-                (session_id, viewer_page),
+                "SELECT * FROM page_reads WHERE session_id=? AND pdf_page=?",
+                (session_id, pdf_page),
             ).fetchone()
+            current_images = db.execute(
+                """SELECT id, pdf_page, mime_type, byte_size, width, height, created_at
+                   FROM page_images WHERE session_id=? AND pdf_page=? ORDER BY created_at, id""",
+                (session_id, pdf_page),
+            ).fetchall()
+        self._remove_attachment_files(attachment_paths)
         result = dict(row)
         result["concepts"] = json.loads(result["concepts"])
+        result["images"] = [dict(image) for image in current_images]
         self._write_session_markdown(self.session(session_id))
         return result
+
+    def _remove_attachment_files(self, relative_paths: list[str]) -> tuple[int, int]:
+        attachments_base = self.root / "records" / "attachments"
+        if attachments_base.is_symlink():
+            return 0, len(relative_paths)
+        attachments_root = attachments_base.resolve()
+        removed = 0
+        errors = 0
+        for relative_path in relative_paths:
+            candidate = self.root / "records" / relative_path
+            if candidate.is_symlink() or candidate.parent.is_symlink():
+                errors += 1
+                continue
+            image_path = candidate.resolve()
+            if not image_path.is_relative_to(attachments_root):
+                errors += 1
+                continue
+            try:
+                if image_path.is_file():
+                    image_path.unlink()
+                    removed += 1
+                parent = image_path.parent
+                if parent != attachments_root and parent.is_dir() and not any(parent.iterdir()):
+                    parent.rmdir()
+            except OSError:
+                errors += 1
+        return removed, errors
+
+    def add_page_image(
+        self,
+        session_id: str,
+        pdf_page: int,
+        image_bytes: bytes,
+        width: int,
+        height: int,
+    ) -> dict[str, Any]:
+        session = self.session(session_id)
+        if session["status"] not in {"active", "paused"}:
+            raise ValueError("This session is already finished.")
+        if session["reference_kind"] != "book" or session["mode"] == "assessment":
+            raise ValueError("Page images are available during PDF lessons.")
+        image_id = uuid.uuid4().hex
+        relative_path = Path("attachments") / session_id / f"{image_id}.png"
+        image_path = self.root / "records" / relative_path
+        attachments_base = self.root / "records" / "attachments"
+        if attachments_base.is_symlink() or image_path.parent.is_symlink():
+            raise ValueError("The screenshot attachment folder cannot be used safely.")
+        image_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if not image_path.parent.resolve().is_relative_to(attachments_base.resolve()):
+            raise ValueError("The screenshot attachment folder cannot be used safely.")
+        image_path.parent.chmod(0o700)
+        try:
+            with image_path.open("xb") as target:
+                target.write(image_bytes)
+            image_path.chmod(0o600)
+            created_at = self._now_text()
+            with self._connect() as db:
+                page = db.execute(
+                    "SELECT 1 FROM page_reads WHERE session_id=? AND pdf_page=?",
+                    (session_id, pdf_page),
+                ).fetchone()
+                if not page:
+                    raise ValueError("Mark this PDF page as read before pasting an image.")
+                db.execute(
+                    """INSERT INTO page_images
+                       (id, session_id, pdf_page, relative_path, mime_type, byte_size,
+                        width, height, created_at)
+                       VALUES (?, ?, ?, ?, 'image/png', ?, ?, ?, ?)""",
+                    (
+                        image_id,
+                        session_id,
+                        pdf_page,
+                        relative_path.as_posix(),
+                        len(image_bytes),
+                        width,
+                        height,
+                        created_at,
+                    ),
+                )
+        except Exception:
+            image_path.unlink(missing_ok=True)
+            raise
+        return {
+            "id": image_id,
+            "pdf_page": pdf_page,
+            "mime_type": "image/png",
+            "byte_size": len(image_bytes),
+            "width": width,
+            "height": height,
+            "created_at": created_at,
+        }
+
+    def page_image(self, session_id: str, image_id: str) -> dict[str, Any] | None:
+        with self._connect() as db:
+            row = db.execute(
+                """SELECT id, session_id, pdf_page, relative_path, mime_type, byte_size,
+                          width, height, created_at
+                   FROM page_images WHERE session_id=? AND id=?""",
+                (session_id, image_id),
+            ).fetchone()
+        return dict(row) if row else None
 
     def messages(self, session_id: str) -> list[dict[str, Any]]:
         with self._connect() as db:
@@ -503,8 +652,16 @@ class StudyStore:
                 "sessions": db.execute("SELECT COUNT(*) FROM sessions").fetchone()[0],
                 "messages": db.execute("SELECT COUNT(*) FROM messages").fetchone()[0],
                 "exercises": db.execute("SELECT COUNT(*) FROM exercises").fetchone()[0],
+                "images": db.execute("SELECT COUNT(*) FROM page_images").fetchone()[0],
             }
+            image_paths = [
+                row["relative_path"] for row in db.execute(
+                    "SELECT relative_path FROM page_images"
+                ).fetchall()
+            ]
             db.execute("DELETE FROM sessions")
+
+        removed_images, attachment_errors = self._remove_attachment_files(image_paths)
 
         generated_markers = {
             "sessions": "<!-- Generated by the local Study Dashboard; edit in the dashboard. -->",
@@ -530,6 +687,8 @@ class StudyStore:
 
         return {
             **counts,
+            "images": removed_images,
+            "attachment_errors": attachment_errors,
             "exports": removed_exports,
             "export_errors": export_errors,
         }
@@ -562,8 +721,13 @@ class StudyStore:
                 (session_id,),
             ).fetchall()
             page_reads = db.execute(
-                "SELECT viewer_page, printed_page, summary, concepts, created_at "
-                "FROM page_reads WHERE session_id=? ORDER BY created_at, viewer_page",
+                "SELECT pdf_page, printed_page, summary, concepts, created_at "
+                "FROM page_reads WHERE session_id=? ORDER BY created_at, pdf_page",
+                (session_id,),
+            ).fetchall()
+            page_images = db.execute(
+                """SELECT id, pdf_page, mime_type, byte_size, width, height, created_at
+                   FROM page_images WHERE session_id=? ORDER BY created_at, id""",
                 (session_id,),
             ).fetchall()
         if result["active_since"]:
@@ -584,8 +748,16 @@ class StudyStore:
         result["reference_title"] = reference.get("title", result["reference_id"])
         result["reference_kind"] = reference.get("kind", "book")
         result["exercises"] = [dict(item) for item in exercises]
+        images_by_page: dict[int, list[dict[str, Any]]] = {}
+        for image in page_images:
+            images_by_page.setdefault(int(image["pdf_page"]), []).append(dict(image))
         result["page_reads"] = [
-            {**dict(item), "concepts": json.loads(item["concepts"])} for item in page_reads
+            {
+                **dict(item),
+                "concepts": json.loads(item["concepts"]),
+                "images": images_by_page.get(int(item["pdf_page"]), []),
+            }
+            for item in page_reads
         ]
         result["page_ranges"] = json.loads(result["page_ranges"] or "[]")
         result.pop("active_since", None)
@@ -631,10 +803,10 @@ class StudyStore:
                     session_id,
                 ),
             )
-            for viewer_page, summary in (page_summaries or {}).items():
+            for pdf_page, summary in (page_summaries or {}).items():
                 db.execute(
-                    "UPDATE page_reads SET summary=? WHERE session_id=? AND viewer_page=?",
-                    (summary, session_id, viewer_page),
+                    "UPDATE page_reads SET summary=? WHERE session_id=? AND pdf_page=?",
+                    (summary, session_id, pdf_page),
                 )
             for exercise in exercises:
                 exercise_id = exercise.get("exercise_id", "").strip()
@@ -709,20 +881,20 @@ class StudyStore:
         if session.get("page_reads"):
             content.extend(["", "## Pages read", ""])
             for page_read in session["page_reads"]:
-                viewer_page = int(page_read["viewer_page"])
+                pdf_page = int(page_read["pdf_page"])
                 page_range = next(
                     (
                         item
                         for item in session.get("page_ranges", [])
-                        if int(item["start_page"]) <= viewer_page <= int(item["end_page"])
+                        if int(item["start_page"]) <= pdf_page <= int(item["end_page"])
                     ),
                     None,
                 )
-                page_title = f"PDF page {viewer_page}"
+                page_title = f"PDF page {pdf_page}"
                 if page_range:
                     page_title = (
                         f"Chapter {page_range['chapter']} · Section {page_range['section']} "
-                        f"— PDF page {viewer_page}"
+                        f"— PDF page {pdf_page}"
                     )
                 content.extend([f"### {page_title}", "", page_read["summary"].strip(), ""])
         path.write_text("\n".join(content) + "\n", encoding="utf-8")

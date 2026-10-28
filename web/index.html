@@ -173,7 +173,7 @@
     <form id="clearRecordsForm">
       <p class="eyebrow">PERMANENT ACTION</p>
       <h2>Clear study records?</h2>
-      <p class="dialog-intro">This deletes saved sessions, Coach conversations, exercises, and Study Room generated session logs and weekly summaries. Saved PDF/video resume positions and manually written Markdown files are kept.</p>
+      <p class="dialog-intro">This deletes saved sessions, Coach conversations, page screenshots, exercises, and Study Room generated session logs and weekly summaries. Saved PDF/video resume positions and manually written Markdown files are kept.</p>
       <p class="clear-records-status" id="clearRecordsStatus" role="status" aria-live="polite"></p>
       <div class="setup-actions"><button id="cancelClearRecords" class="button button-quiet" type="button">Cancel</button><button id="confirmClearRecords" class="button button-danger" type="submit">Clear records</button></div>
     </form>
@@ -244,7 +244,7 @@
   <dialog id="pageSummaryDialog" class="dialog-card page-summary-dialog" aria-labelledby="pageSummaryTitle">
     <p class="eyebrow">YOUR READING NOTES</p>
     <h2 id="pageSummaryTitle">Edit page summary</h2>
-    <p class="dialog-intro">Edit this page’s Markdown notes. Saved notes appear in this session’s Study record.</p>
+    <p class="dialog-intro">Edit this page’s Markdown notes. Paste a screenshot at the cursor to add it to the summary.</p>
     <label class="summary-page-picker">Page to review<select id="summaryPageSelect" aria-label="Choose a scanned PDF page summary"></select></label>
     <div class="summary-editor-tabs" role="tablist" aria-label="Summary editor view">
       <button id="summaryEditTab" class="summary-editor-tab selected" type="button" role="tab" aria-selected="true">Markdown</button>

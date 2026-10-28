@@ -275,7 +275,7 @@ class StudyApplication:
         if is_first_turn and session["page_reads"]:
             earlier_pages = []
             for page in session["page_reads"]:
-                label = f"PDF viewer page {page['viewer_page']}"
+                label = f"PDF viewer page {page['pdf_page']}"
                 if page["printed_page"]:
                     label += f" (printed page {page['printed_page']})"
                 earlier_pages.append(f"{label}: {page['summary']}")
@@ -302,7 +302,7 @@ class StudyApplication:
             page_reads = session["page_reads"]
             if not page_reads:
                 raise ValueError("Mark at least one PDF page as read before finishing this session.")
-            end_position = str(max(page["viewer_page"] for page in page_reads))
+            end_position = str(max(page["pdf_page"] for page in page_reads))
             raw_ranges = payload.get("page_ranges")
             if not isinstance(raw_ranges, list) or not raw_ranges:
                 raise ValueError("Add a chapter and section range for the pages you read.")
@@ -337,15 +337,15 @@ class StudyApplication:
                 if current["start_page"] <= previous["end_page"]:
                     raise ValueError("Chapter and section PDF page ranges cannot overlap.")
 
-            viewer_pages = {int(page["viewer_page"]) for page in page_reads}
-            for viewer_page in viewer_pages:
+            pdf_pages = {int(page["pdf_page"]) for page in page_reads}
+            for pdf_page in pdf_pages:
                 matches = [
                     item
                     for item in page_ranges
-                    if item["start_page"] <= viewer_page <= item["end_page"]
+                    if item["start_page"] <= pdf_page <= item["end_page"]
                 ]
                 if len(matches) != 1:
-                    raise ValueError(f"Assign scanned PDF page {viewer_page} to exactly one range.")
+                    raise ValueError(f"Assign scanned PDF page {pdf_page} to exactly one range.")
 
             raw_summaries = payload.get("page_summaries")
             if not isinstance(raw_summaries, list):
@@ -353,22 +353,22 @@ class StudyApplication:
             for item in raw_summaries:
                 if not isinstance(item, dict):
                     raise ValueError("Check the page summary entries.")
-                raw_viewer_page = item.get("viewer_page")
-                if raw_viewer_page is None:
+                raw_pdf_page = item.get("pdf_page")
+                if raw_pdf_page is None:
                     raise ValueError("A page summary has an invalid PDF viewer page.")
                 try:
-                    viewer_page = int(raw_viewer_page)
+                    pdf_page = int(raw_pdf_page)
                 except (TypeError, ValueError) as error:
                     raise ValueError("A page summary has an invalid PDF viewer page.") from error
                 summary = item.get("summary")
                 if not isinstance(summary, str) or not summary.strip():
-                    raise ValueError(f"The summary for PDF page {viewer_page} cannot be empty.")
+                    raise ValueError(f"The summary for PDF page {pdf_page} cannot be empty.")
                 if len(summary) > 12000:
-                    raise ValueError(f"The summary for PDF page {viewer_page} is too long.")
-                if viewer_page in page_summaries:
-                    raise ValueError(f"PDF page {viewer_page} appears more than once in the summaries.")
-                page_summaries[viewer_page] = summary.strip()
-            if set(page_summaries) != viewer_pages:
+                    raise ValueError(f"The summary for PDF page {pdf_page} is too long.")
+                if pdf_page in page_summaries:
+                    raise ValueError(f"PDF page {pdf_page} appears more than once in the summaries.")
+                page_summaries[pdf_page] = summary.strip()
+            if set(page_summaries) != pdf_pages:
                 raise ValueError("Review a summary for every PDF page marked as read.")
         elif session["reference_kind"] == "book":
             try:
@@ -482,6 +482,8 @@ class StudyHandler(BaseHTTPRequestHandler):
             self.send_response(204)
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
+        elif path.startswith("/records/attachments/"):
+            self._serve_page_image(path)
         elif path.startswith("/pdfjs-resources/"):
             self._static(
                 path.removeprefix("/pdfjs-resources/"),
@@ -612,12 +614,91 @@ class StudyHandler(BaseHTTPRequestHandler):
                 record["page_ranges"] = session["page_ranges"]
         self._json(200, record)
 
+    def _serve_page_image(self, path: str) -> None:
+        parts = path.split("/")
+        if (
+            len(parts) != 5
+            or parts[1:3] != ["records", "attachments"]
+            or not re.fullmatch(r"[a-f0-9]{32}", parts[3])
+            or not re.fullmatch(r"[a-f0-9]{32}\.png", parts[4])
+        ):
+            self._json(404, {"error": "Study image not found."})
+            return
+        image = self.app.store.page_image(parts[3], parts[4][:-4])
+        if not image:
+            self._json(404, {"error": "Study image not found."})
+            return
+        attachments_root = self.app.root / "records" / "attachments"
+        image_file = self.app.root / "records" / image["relative_path"]
+        if attachments_root.is_symlink() or image_file.is_symlink() or image_file.parent.is_symlink():
+            self._json(404, {"error": "Study image not found."})
+            return
+        resolved_root = attachments_root.resolve()
+        resolved_file = image_file.resolve()
+        if not resolved_file.is_relative_to(resolved_root) or not resolved_file.is_file():
+            self._json(404, {"error": "Study image not found."})
+            return
+        body = resolved_file.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", "image/png")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "private, max-age=86400")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _upload_page_image(self, path: str, query: dict[str, list[str]]) -> None:
+        parts = path.strip("/").split("/")
+        if (
+            len(parts) != 4
+            or parts[:2] != ["api", "session"]
+            or not re.fullmatch(r"[a-f0-9]{32}", parts[2])
+            or parts[3] != "page-image"
+        ):
+            self._json(404, {"error": "Study image upload route not found."})
+            return
+        if self.headers.get_content_type() != "image/png":
+            self._json(415, {"error": "Paste or select an image that can be saved as PNG."})
+            return
+        try:
+            pdf_page = int((query.get("pdf_page") or [""])[0])
+        except (TypeError, ValueError) as error:
+            raise ValueError("Choose the PDF page for this image.") from error
+        if pdf_page < 1:
+            raise ValueError("PDF page numbers must be positive.")
+        length = int(self.headers.get("Content-Length", "0"))
+        if length < 45 or length > 20_000_000:
+            raise ValueError("PNG images must be between 45 bytes and 20 MB.")
+        image_bytes = self.rfile.read(length)
+        if len(image_bytes) != length:
+            raise ValueError("The pasted image upload was incomplete.")
+        if (
+            image_bytes[:8] != b"\x89PNG\r\n\x1a\n"
+            or image_bytes[8:12] != b"\x00\x00\x00\r"
+            or image_bytes[12:16] != b"IHDR"
+            or not image_bytes.endswith(b"\x00\x00\x00\x00IEND\xaeB`\x82")
+        ):
+            raise ValueError("The image is not a complete PNG file.")
+        width = int.from_bytes(image_bytes[16:20], "big")
+        height = int.from_bytes(image_bytes[20:24], "big")
+        if width < 1 or height < 1 or width > 10_000 or height > 10_000 or width * height > 40_000_000:
+            raise ValueError("The pasted image dimensions are too large.")
+        image = self.app.store.add_page_image(
+            parts[2], pdf_page, image_bytes, width, height
+        )
+        self._json(201, {"image": image})
+
     def do_POST(self) -> None:
         if not self._secure_post():
             return
         try:
+            parsed = urlparse(self.path)
+            path = parsed.path
+            if path.endswith("/page-image"):
+                self._upload_page_image(path, parse_qs(parsed.query))
+                return
             payload = self._body()
-            path = urlparse(self.path).path
             if path == "/api/auth/login":
                 result = self.app.login()
                 self._json(200, {"auth_url": result.get("authUrl", "")})
@@ -685,7 +766,7 @@ class StudyHandler(BaseHTTPRequestHandler):
             self._json(200, {"page": page})
         elif action == "page-summary":
             try:
-                viewer_page = int(payload.get("viewer_page"))
+                pdf_page = int(payload.get("pdf_page"))
             except (TypeError, ValueError) as error:
                 raise ValueError("Choose a valid PDF viewer page.") from error
             summary = payload.get("summary")
@@ -695,7 +776,7 @@ class StudyHandler(BaseHTTPRequestHandler):
                 raise ValueError("Page notes must be 12,000 characters or fewer.")
             self._json(
                 200,
-                {"page": self.app.store.update_page_summary(session_id, viewer_page, summary.strip())},
+                {"page": self.app.store.update_page_summary(session_id, pdf_page, summary.strip())},
             )
         else:
             self._json(404, {"error": "Not found."})
@@ -763,7 +844,7 @@ class StudyHandler(BaseHTTPRequestHandler):
             self._json(400, {"error": "Could not identify the current PDF viewer page."})
             return
         existing = next(
-            (page for page in session["page_reads"] if page["viewer_page"] == page_number),
+            (page for page in session["page_reads"] if page["pdf_page"] == page_number),
             None,
         )
         if existing:
@@ -774,7 +855,7 @@ class StudyHandler(BaseHTTPRequestHandler):
             self._sse(
                 "page_recorded",
                 {
-                    "viewer_page": existing["viewer_page"],
+                    "pdf_page": existing["pdf_page"],
                     "printed_page": existing["printed_page"],
                     "summary": existing["summary"],
                     "concepts": existing["concepts"],
@@ -918,7 +999,7 @@ class StudyHandler(BaseHTTPRequestHandler):
                                 self._sse(
                                     "page_recorded",
                                     {
-                                        "viewer_page": saved["viewer_page"],
+                                        "pdf_page": saved["pdf_page"],
                                         "printed_page": saved["printed_page"],
                                         "summary": saved["summary"],
                                         "concepts": saved["concepts"],

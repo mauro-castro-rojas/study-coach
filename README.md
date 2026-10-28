@@ -9,7 +9,7 @@ not committed to this repository.
 
 - Python 3.12 or newer
 - Node.js 24 LTS and npm
-- Codex CLI authenticated with ChatGPT for Study Coach features
+- Optional: Codex CLI authenticated with ChatGPT for Study Coach features
 
 For WSL, the project uses [nvm](https://github.com/nvm-sh/nvm) to select the
 Node version in `.nvmrc`. If nvm is not installed, install it using its official
@@ -31,7 +31,7 @@ npm ci
 ```
 
 `package.json` lists the direct npm dependencies; `package-lock.json` records
-their exact resolved versions. npm downloads their code into the ignored
+their exact resolved versions. npm downloads their code into the git ignored
 `node_modules/` directory. The app uses `@missing-elements/pdfjs-viewer` for
 the PDF.js reader and KaTeX for math; `pdfjs-dist` is installed transitively by
 the viewer package. That directory is never committed.

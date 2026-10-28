@@ -287,7 +287,7 @@ function updatePageReadControl() {
   const control = $("readPageWithCoach");
   if (!control) return;
   const page = Number(appState.readerPage);
-  const recorded = appState.pageReads.some((item) => Number(item.viewer_page) === page);
+  const recorded = appState.pageReads.some((item) => Number(item.pdf_page) === page);
   const loaded = Boolean(appState.pdfViewerApps.pdfFrame?.pdfDocument);
   control.checked = recorded;
   const manualMode = appState.session?.coach_mode === "manual";
@@ -312,8 +312,8 @@ function renderPageReadTracker() {
   const list = $("pageReadTrackerList");
   list.replaceChildren(...pages.map((page) => {
     const item = document.createElement("li");
-    item.textContent = `p. ${page.viewer_page}`;
-    item.title = `PDF viewer page ${page.viewer_page} is marked as read`;
+    item.textContent = `p. ${page.pdf_page}`;
+    item.title = `PDF viewer page ${page.pdf_page} is marked as read`;
     return item;
   }));
 }
@@ -690,6 +690,13 @@ function renderInlineMarkdown(text) {
   source = source.replace(/\\\(([\s\S]+?)\\\)/g, (_match, formula) => (
     preserve(renderMath(formula, false))
   ));
+  source = source.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (match, alt, path) => {
+    const attachment = path.match(/^\.\.\/attachments\/([a-f0-9]{32})\/([a-f0-9]{32})\.png$/);
+    if (!attachment) return match;
+    return preserve(
+      `<img class="study-note-image" src="/records/attachments/${attachment[1]}/${attachment[2]}.png" alt="${escapeHtml(alt)}" loading="lazy">`,
+    );
+  });
   let html = escapeHtml(source);
   html = html
     .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
@@ -911,12 +918,12 @@ async function readStudyRecord(record, selectedButton) {
             pageSection.className = "record-page-summary";
             const heading = document.createElement("h3");
             const pageRange = (data.page_ranges || []).find((item) => (
-              Number(item.start_page) <= Number(page.viewer_page)
-              && Number(page.viewer_page) <= Number(item.end_page)
+              Number(item.start_page) <= Number(page.pdf_page)
+              && Number(page.pdf_page) <= Number(item.end_page)
             ));
             heading.textContent = pageRange
-              ? `Chapter ${pageRange.chapter} · Section ${pageRange.section} · p. ${page.viewer_page}`
-              : `p. ${page.viewer_page}`;
+              ? `Chapter ${pageRange.chapter} · Section ${pageRange.section} · p. ${page.pdf_page}`
+              : `p. ${page.pdf_page}`;
             const summary = document.createElement("div");
             summary.className = "markdown-document";
             summary.innerHTML = renderMarkdown(page.summary);
@@ -1070,10 +1077,10 @@ async function clearStudyRecords(event) {
     });
     $("clearRecordsDialog").close();
     status.textContent = "";
-    if (result.export_errors) {
-      toast(`Database cleared, but ${result.export_errors} generated file(s) could not be deleted.`);
+    if (result.export_errors || result.attachment_errors) {
+      toast(`Database cleared, but ${result.export_errors} generated file(s) and ${result.attachment_errors} screenshot(s) could not be deleted.`);
     } else {
-      toast(`Study records cleared. Removed ${result.sessions} session(s) and ${result.exports} generated file(s).`);
+      toast(`Study records cleared. Removed ${result.sessions} session(s), ${result.images} screenshot(s), and ${result.exports} generated file(s).`);
     }
     try {
       await loadDashboard();
@@ -1191,7 +1198,7 @@ async function markCurrentPageRead() {
     return;
   }
   const control = $("readPageWithCoach");
-  if (appState.pageReads.some((item) => Number(item.viewer_page) === pageNumber)) return;
+  if (appState.pageReads.some((item) => Number(item.pdf_page) === pageNumber)) return;
   appState.pageReadPending = true;
   $("sendButton").disabled = true;
   $("chatInput").disabled = true;
@@ -1208,8 +1215,8 @@ async function markCurrentPageRead() {
       appState.pageReads.push(markedPage);
       appState.session.page_reads = appState.pageReads;
       updatePageReadControl();
-      toast(`p. ${markedPage.viewer_page} marked as read.`);
-      openPageSummaryDialog(markedPage.viewer_page);
+      toast(`p. ${markedPage.pdf_page} marked as read.`);
+      openPageSummaryDialog(markedPage.pdf_page);
       return;
     }
     const page = await viewer.pdfDocument.getPage(pageNumber);
@@ -1263,9 +1270,9 @@ async function markCurrentPageRead() {
         if (eventName === "error") throw new Error(data.error || "Could not save this page.");
         if (eventName === "page_recorded") {
           recorded = true;
-          newlyRecordedPage = Number(data.viewer_page);
+          newlyRecordedPage = Number(data.pdf_page);
           appState.pageReads.push({
-            viewer_page: data.viewer_page,
+            pdf_page: data.pdf_page,
             printed_page: data.printed_page,
             summary: data.summary,
             concepts: data.concepts || [],
@@ -1273,7 +1280,7 @@ async function markCurrentPageRead() {
           appState.session.page_reads = appState.pageReads;
           if (data.exercise_message) appendMessage("assistant", data.exercise_message);
           updatePageReadControl();
-          toast(`PDF viewer page ${data.viewer_page} saved to this session.`);
+          toast(`PDF viewer page ${data.pdf_page} saved to this session.`);
         }
       }
     }
@@ -1510,7 +1517,7 @@ function addExerciseRow() {
 }
 
 function sortedPageReads() {
-  return [...appState.pageReads].sort((a, b) => Number(a.viewer_page) - Number(b.viewer_page));
+  return [...appState.pageReads].sort((a, b) => Number(a.pdf_page) - Number(b.pdf_page));
 }
 
 function renderFinishReadPages() {
@@ -1518,7 +1525,7 @@ function renderFinishReadPages() {
   list.replaceChildren();
   for (const page of sortedPageReads()) {
     const item = document.createElement("li");
-    item.textContent = `p. ${page.viewer_page}`;
+    item.textContent = `p. ${page.pdf_page}`;
     list.append(item);
   }
 }
@@ -1556,7 +1563,7 @@ function addChapterRangeRow(range = {}) {
 function initializeChapterRanges() {
   const rows = $("chapterRangeRows");
   rows.replaceChildren();
-  const pages = sortedPageReads().map((page) => Number(page.viewer_page));
+  const pages = sortedPageReads().map((page) => Number(page.pdf_page));
   const ranges = appState.pageRangesDraft.length
     ? appState.pageRangesDraft
     : appState.session.page_ranges?.length
@@ -1596,10 +1603,10 @@ function validateChapterRanges() {
   }
   for (const page of sortedPageReads()) {
     const matchingRanges = ranges.filter((range) => (
-      range.start_page <= Number(page.viewer_page) && Number(page.viewer_page) <= range.end_page
+      range.start_page <= Number(page.pdf_page) && Number(page.pdf_page) <= range.end_page
     ));
     if (matchingRanges.length !== 1) {
-      return fail(`Assign scanned PDF page ${page.viewer_page} to exactly one chapter and section range.`);
+      return fail(`Assign scanned PDF page ${page.pdf_page} to exactly one chapter and section range.`);
     }
   }
   saveChapterRangeDraft();
@@ -1607,8 +1614,8 @@ function validateChapterRanges() {
 }
 
 function renderSelectedPageSummary() {
-  const page = appState.pageReads.find((item) => Number(item.viewer_page) === Number($("summaryPageSelect").value));
-  appState.pageSummaryEditingPage = page?.viewer_page ?? null;
+  const page = appState.pageReads.find((item) => Number(item.pdf_page) === Number($("summaryPageSelect").value));
+  appState.pageSummaryEditingPage = page?.pdf_page ?? null;
   $("pageSummaryEditor").value = page?.summary || "";
   appState.pageSummaryOriginal = page?.summary || "";
   $("pageSummarySaveStatus").textContent = "";
@@ -1618,7 +1625,7 @@ function renderSelectedPageSummary() {
 
 function renderPageSummaryPreview() {
   const editor = $("pageSummaryEditor");
-  const page = appState.pageReads.find((item) => Number(item.viewer_page) === Number($("summaryPageSelect").value));
+  const page = appState.pageReads.find((item) => Number(item.pdf_page) === Number($("summaryPageSelect").value));
   if (page) page.summary = editor.value;
   $("pageSummaryPreview").innerHTML = renderMarkdown(editor.value);
 }
@@ -1638,7 +1645,7 @@ function setSummaryEditorMode(mode) {
 function openPageSummaryDialog(viewerPage) {
   const select = $("summaryPageSelect");
   select.replaceChildren(...sortedPageReads().map((page) => {
-    const option = new Option(`p. ${page.viewer_page}`, String(page.viewer_page));
+    const option = new Option(`p. ${page.pdf_page}`, String(page.pdf_page));
     return option;
   }));
   const index = [...select.options].findIndex((option) => Number(option.value) === Number(viewerPage));
@@ -1649,7 +1656,7 @@ function openPageSummaryDialog(viewerPage) {
 }
 
 async function savePageSummary() {
-  const page = appState.pageReads.find((item) => Number(item.viewer_page) === Number(appState.pageSummaryEditingPage));
+  const page = appState.pageReads.find((item) => Number(item.pdf_page) === Number(appState.pageSummaryEditingPage));
   if (!page) return false;
   const summary = $("pageSummaryEditor").value.trim();
   if (!summary) {
@@ -1665,9 +1672,10 @@ async function savePageSummary() {
   try {
     const result = await api(`/api/session/${appState.session.id}/page-summary`, {
       method: "POST",
-      body: JSON.stringify({ viewer_page: Number(page.viewer_page), summary }),
+      body: JSON.stringify({ pdf_page: Number(page.pdf_page), summary }),
     });
     page.summary = result.page.summary;
+    page.images = result.page.images || [];
     appState.pageSummaryOriginal = page.summary;
     $("pageSummaryEditor").value = page.summary;
     renderPageSummaryPreview();
@@ -1679,6 +1687,76 @@ async function savePageSummary() {
   } finally {
     button.disabled = false;
     button.textContent = "Save notes";
+  }
+}
+
+async function pastedImageAsPng(file) {
+  if (file.type === "image/png") return file;
+  if (typeof createImageBitmap !== "function") {
+    throw new Error("This browser cannot convert the pasted image to PNG.");
+  }
+  const bitmap = await createImageBitmap(file);
+  if (bitmap.width * bitmap.height > 40_000_000) {
+    bitmap.close();
+    throw new Error("The pasted image dimensions are too large.");
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  canvas.getContext("2d").drawImage(bitmap, 0, 0);
+  bitmap.close();
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error("Could not convert the pasted image to PNG."));
+    }, "image/png");
+  });
+}
+
+async function pastePageSummaryImage(event) {
+  const imageItem = [...(event.clipboardData?.items || [])]
+    .find((item) => item.type.startsWith("image/"));
+  const file = imageItem?.getAsFile();
+  if (!file) return;
+  event.preventDefault();
+  const editor = event.currentTarget;
+  const start = editor.selectionStart;
+  const end = editor.selectionEnd;
+  const page = appState.pageReads.find((item) => Number(item.pdf_page) === Number(appState.pageSummaryEditingPage));
+  if (!page || !appState.session) return;
+  editor.disabled = true;
+  $("pageSummarySaveStatus").textContent = "Adding screenshot…";
+  $("pageSummarySaveStatus").classList.remove("summary-save-error");
+  try {
+    const png = await pastedImageAsPng(file);
+    if (png.size > 20_000_000) throw new Error("The pasted PNG must be smaller than 20 MB.");
+    const response = await fetch(`/api/session/${appState.session.id}/page-image?pdf_page=${page.pdf_page}`, {
+      method: "POST",
+      headers: { "Content-Type": "image/png" },
+      body: png,
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `Could not save the image (${response.status}).`);
+    const imagePath = `../attachments/${appState.session.id}/${result.image.id}.png`;
+    const before = editor.value.slice(0, start);
+    const after = editor.value.slice(end);
+    const prefix = before && !before.endsWith("\n") ? "\n\n" : "";
+    const suffix = after && !after.startsWith("\n") ? "\n\n" : "";
+    const markdown = `![Screenshot for p. ${page.pdf_page}](${imagePath})`;
+    const insertion = `${prefix}${markdown}${suffix}`;
+    editor.value = `${before}${insertion}${after}`;
+    const cursor = before.length + insertion.length;
+    editor.setSelectionRange(cursor, cursor);
+    page.images ||= [];
+    page.images.push(result.image);
+    renderPageSummaryPreview();
+    await savePageSummary();
+  } catch (error) {
+    $("pageSummarySaveStatus").textContent = `Could not add screenshot: ${error.message}`;
+    $("pageSummarySaveStatus").classList.add("summary-save-error");
+  } finally {
+    editor.disabled = false;
+    editor.focus();
   }
 }
 
@@ -1726,7 +1804,7 @@ async function saveFinish(event) {
   const pageRanges = isPdfLesson ? validateChapterRanges() : [];
   if (isPdfLesson && !pageRanges) return;
   const pageSummaries = isPdfLesson ? sortedPageReads().map((page) => ({
-    viewer_page: Number(page.viewer_page),
+    pdf_page: Number(page.pdf_page),
     summary: page.summary,
   })) : [];
   if (isPdfLesson && pageSummaries.some((item) => !item.summary?.trim())) {
@@ -1842,7 +1920,7 @@ function wireEvents() {
   });
   $("reviewSummariesButton").addEventListener("click", () => {
     const firstPage = sortedPageReads()[0];
-    if (firstPage) openPageSummaryDialog(firstPage.viewer_page);
+    if (firstPage) openPageSummaryDialog(firstPage.pdf_page);
   });
   $("closePageSummary").addEventListener("click", async () => {
     const saved = $("pageSummaryEditor").value.trim() === appState.pageSummaryOriginal.trim() || await savePageSummary();
@@ -1855,6 +1933,7 @@ function wireEvents() {
     }
   });
   $("pageSummaryEditor").addEventListener("input", renderPageSummaryPreview);
+  $("pageSummaryEditor").addEventListener("paste", pastePageSummaryImage);
   $("summaryEditTab").addEventListener("click", () => setSummaryEditorMode("edit"));
   $("summaryPreviewTab").addEventListener("click", () => setSummaryEditorMode("preview"));
   $("openCodexUsage").addEventListener("click", () => {
