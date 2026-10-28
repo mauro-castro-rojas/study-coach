@@ -1371,6 +1371,7 @@ function showSession(session, messages = []) {
     if (appState.session?.status !== "active") return;
     try {
       const data = await api(`/api/session/${session.id}/heartbeat`, { method: "POST", body: "{}" });
+      if (appState.session?.status !== "active") return;
       appState.session = data.session;
       appState.timerBase = data.session.elapsed_seconds;
       appState.timerBaseMs = Date.now();
@@ -1381,11 +1382,14 @@ function showSession(session, messages = []) {
 }
 
 function syncTimer(session) {
-  clearInterval(appState.timer);
+  if (appState.timer) clearInterval(appState.timer);
+  appState.timer = null;
   appState.timerBase = Number(session.elapsed_seconds || 0);
   appState.timerBaseMs = Date.now();
-  appState.timer = setInterval(renderTimer, 250);
   renderTimer();
+  if (session.status === "active") {
+    appState.timer = setInterval(renderTimer, 250);
+  }
 }
 
 function renderTimer() {
@@ -1755,6 +1759,8 @@ async function completeSession(payload) {
     $("finishDialog").close();
     appState.session = null;
     if (appState.heartbeatHandle) clearInterval(appState.heartbeatHandle);
+    if (appState.timer) clearInterval(appState.timer);
+    appState.timer = null;
     $("sessionView").classList.add("hidden");
     $("dashboardView").classList.remove("hidden");
     await loadDashboard();
@@ -1769,16 +1775,20 @@ async function completeSession(payload) {
 async function pauseOrResume() {
   if (!appState.session) return;
   const action = appState.session.status === "active" ? "pause" : "resume";
+  const button = $("pauseButton");
+  button.disabled = true;
+  button.textContent = action === "pause" ? "Pausing…" : "Resuming…";
   try {
     const result = await api(`/api/session/${appState.session.id}/${action}`, { method: "POST", body: "{}" });
     appState.session = result.session;
-    appState.timerBase = result.session.elapsed_seconds;
-    appState.timerBaseMs = Date.now();
-    $("pauseButton").textContent = action === "pause" ? "Resume" : "Pause";
+    syncTimer(result.session);
+    button.textContent = action === "pause" ? "Resume" : "Pause";
     $("coachStatus").textContent = action === "pause" ? "Session paused" : "Here with you";
-    renderTimer();
   } catch (error) {
+    button.textContent = appState.session.status === "active" ? "Pause" : "Resume";
     toast(error.message);
+  } finally {
+    button.disabled = false;
   }
 }
 
