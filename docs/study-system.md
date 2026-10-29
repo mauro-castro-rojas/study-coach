@@ -98,19 +98,48 @@ The dashboard retains ten separate grades and rolls up the sessions by topic.
 The current version does not launch or enforce that ten-part sequence as one
 automatic two-hour exam.
 
+## Stored study data
+
 The local SQLite database at `records/study.sqlite3` is the structured source
-for sessions, page summaries, chat history, and dashboard totals. PDF and video
-resume positions are kept in `records/progress.json`. The app writes or updates
-a readable Markdown export for each session under
-`records/sessions/` as pages are confirmed and when the session finishes, and
-regenerates a weekly summary under `records/weekly/`. Existing session exports
-without the app's generated marker are preserved; the app writes a separate
-dashboard summary rather than overwriting them.
-Each page summary is keyed by `(session_id, pdf_page)` in `page_reads`. Multiple
-images can be attached to that summary through `page_images`, which stores their
-relative file paths and metadata; image bytes remain under
-`records/attachments/`, outside SQLite. This records directory is private local
-data and is excluded from Git.
+for the study plan, resume positions, and study records. `study_topics`,
+`study_references`, `weekly_assessment_topics`, and `study_settings` define the
+topics, materials, weekly order, timezone, and assessment duration.
+`topic_progress` and `reference_progress` store the current PDF and video resume
+positions. The `sessions` table stores session timing, status, topic and
+reference IDs, positions, page ranges, concepts, exercise grades, assessment
+scores, and Codex thread IDs. `page_reads` stores each PDF viewer page, its
+summary and concepts. `messages` stores the Study Coach conversation, and
+`exercises` stores exercise results. Assessment grades are fields on sessions,
+not a separate database or directory.
+
+Each page summary is keyed by `(session_id, pdf_page)` in `page_reads`. The
+`page_images` table stores screenshot metadata and relative paths; image bytes
+are PNG files under `records/attachments/<session-id>/`. PDF and video resume
+positions live in SQLite. The app generates session Markdown
+exports under `records/sessions/` and weekly summaries under `records/weekly/`.
+The Study Records browser reads these Markdown exports. SQLite remains the
+structured source of truth, so edit summaries in the app; directly editing a
+generated export is not a reliable way to update the database, and a later app
+write may replace it.
+
+These are local user data, excluded from Git. A fresh checkout creates its own
+database and records; it does not include another learner's records. To move a
+learner's data, back up and restore the records directory while Study Room is
+stopped. Book PDFs are separate topic files or symbolic links; links into a
+personal OneDrive path must be recreated on another computer. The app does not
+currently use Docker. If it is containerized later, the records directory must
+be mounted from persistent host storage or a Docker volume; data saved only in
+a container's writable layer is not a backup.
+
+`records/references.json` may exist from an earlier version, but current runtime
+code does not read it. SQLite is the runtime source of truth. If an older local
+`config/study-plan.json` or
+`records/progress.json` exists, startup imports its values with inserts that do
+not overwrite database values, records a migration marker for progress, and
+removes the old JSON file after the database commit. Old scheduler files such as
+`records/runtime/active-timer.json` and
+`records/runtime/timer-events.jsonl` are not used by the current implementation;
+current session timing is stored in SQLite.
 
 Open **Study records** on the dashboard to browse session logs, Study Coach
 conversations, and weekly summaries. Tabs separate the record types; session
@@ -119,6 +148,83 @@ are paginated. In a session log, **Show page summaries** opens page summaries
 and up to three key concepts per page separately from the session details.
 Session exports show both the start and finish dates if a session spans more
 than one day.
+
+## Inspect SQLite from WSL
+
+The Study Room server uses Python's standard-library `sqlite3` module; there is
+no Python package to install. The interactive `sqlite3` command-line program is
+a separate optional tool. In Ubuntu on WSL, install it with:
+
+```bash
+sudo apt update
+sudo apt install sqlite3
+sqlite3 --version
+```
+
+Run commands from the project root. Pass the database filename when starting
+the console so it opens the persistent Study Room database:
+
+```bash
+cd ~/learn
+sqlite3 -readonly records/study.sqlite3
+```
+
+At the `sqlite>` prompt, verify which database is open and list its tables:
+
+```text
+.databases
+.tables
+.schema sessions
+PRAGMA table_info(sessions);
+PRAGMA table_info(page_reads);
+.quit
+```
+
+Dot commands such as `.tables`, `.schema`, `.open`, and `.quit` are SQLite
+console commands. SQL statements such as `PRAGMA` and `SELECT` end in a
+semicolon. To open the database after starting the console without a filename,
+use `.open records/study.sqlite3`. Starting `sqlite3` with no filename creates
+a temporary in-memory database; changes there do not affect Study Room. Use
+`.databases` to verify the filename before any write operation. A `.sqlite3`
+file is a binary database, so opening it as ordinary text in Neovim will not
+show readable tables.
+
+Read-only queries for the most common records:
+
+```sql
+SELECT id, topic_id, reference_id, mode, status, started_at, ended_at
+FROM sessions
+ORDER BY started_at DESC;
+
+SELECT session_id, pdf_page, printed_page, length(summary) AS summary_characters
+FROM page_reads
+ORDER BY created_at DESC;
+
+SELECT session_id, role, created_at
+FROM messages
+ORDER BY id;
+
+SELECT session_id, exercise_id, outcome
+FROM exercises
+ORDER BY id;
+```
+
+Before manual database changes, stop `./study` with `Ctrl+C` and make a backup.
+To back up the entire records directory, including Markdown exports and page
+images, run this from the project root:
+
+```bash
+cp -a records "../learn-records-backup-$(date +%Y%m%d-%H%M%S)"
+```
+
+For a database-only snapshot, open the database in the regular (not
+read-only) SQLite console and run `.backup /tmp/study-before-schema-change.sqlite3`.
+The `cp -a records` command is the more complete backup because it also includes
+the Markdown exports, resume-position file, and screenshot images.
+
+Do not manually delete `study.sqlite3-wal` or `study.sqlite3-shm`. SQLite uses
+these sidecar files while the database is in write-ahead-log mode; the WAL may
+contain recent transactions. Let SQLite manage them.
 
 ## Clear study records
 
@@ -131,52 +237,60 @@ Markdown files. The app blocks
 the action while a session is active or paused; resume and finish that session
 first.
 
-For a manual database cleanup, first stop Study Room with `Ctrl+C` in the
-terminal running `./study`. From `~/learn`, make a full backup of the records
-directory:
+The portal action is preferred because it removes the database rows, attached
+PNG files, and app-generated session and weekly Markdown exports together. A
+manual SQL deletion affects only SQLite. It leaves the Markdown exports and
+image files on disk, even though their database links are gone.
 
-```bash
-cp -a records "../learn-records-backup-$(date +%Y%m%d-%H%M%S)"
-```
-
-The `sqlite3` command-line program is optional and may need to be installed
-separately. Open the SQLite database with:
+If manually clearing SQLite only, stop Study Room, back up `records/` as
+described in [Inspect SQLite from WSL](#inspect-sqlite-from-wsl), then open the
+persistent database and verify it with `.databases`:
 
 ```bash
 sqlite3 records/study.sqlite3
 ```
 
-In the SQLite prompt, review the sessions and delete them in a transaction:
+In the SQLite prompt, review sessions, then delete them in a transaction:
 
 ```sql
 SELECT id, topic_id, status, started_at
 FROM sessions
 ORDER BY started_at DESC;
 
-PRAGMA foreign_keys=ON;
-BEGIN;
+PRAGMA foreign_keys = ON;
+BEGIN IMMEDIATE;
 DELETE FROM sessions;
 COMMIT;
 .quit
 ```
 
-With foreign keys enabled, deleting sessions also deletes their related chat
-messages and exercise results. This manual SQL procedure does not delete the
-Markdown exports described below.
+Deleting sessions cascades to page summaries, Coach messages, exercise results,
+and screenshot metadata. It does not delete screenshot PNG files or Markdown
+exports. Prefer **Clear study records** in the portal when you want the related
+files removed too. The action preserves PDF/video resume positions and manually
+written topic Markdown files.
 
-Markdown session exports and weekly summaries are files outside SQLite, so they
-remain in the Study records reader after the database is cleared. To remove
-those too, list the app-generated files and delete only the files you intend to
-remove:
+## Remove obsolete schema from an older local database
 
-```bash
-rg -l "Generated by the local Study Dashboard" records/sessions records/weekly
+The current app does not create or use the old `metadata` table or the
+`sessions.legacy` column. They may remain in a database created by an earlier
+version. Inspect first with `.tables` and `PRAGMA table_info(sessions);`. The
+following cleanup is only for a database where `metadata` exists and
+`sessions.legacy` appears in that column list. Back up `records/`, stop the
+app, and verify `.databases` points to `records/study.sqlite3` before running
+schema changes. SQLite 3.35 or newer supports `DROP COLUMN`.
+
+```sql
+BEGIN IMMEDIATE;
+DROP TABLE IF EXISTS metadata;
+ALTER TABLE sessions DROP COLUMN legacy;
+COMMIT;
 ```
 
-This process preserves `records/progress.json`, which stores the current PDF
-and video resume cursors. The SQLite database is the structured source for
-dashboard totals and Coach chat history. Topic folders under `topics/` are
-separate from records and are not changed by the clear action.
+If a statement fails before `COMMIT`, run `ROLLBACK;` before continuing. These
+changes remove the obsolete import marker and column; they do not delete
+session rows. Do not run `DROP TABLE sessions` or delete the database file to
+remove the legacy marker.
 
 ## Codex tutor, sign-in, skills, and agents
 
@@ -242,14 +356,13 @@ the saved playback position.
 | 3D modeling | FreeCAD robotic-arm walkthrough | [YouTube tutorial](https://www.youtube.com/watch?v=41OdocnsyXE) |
 | 3D modeling | Blender robotic-arm rigging | [YouTube tutorial](https://www.youtube.com/watch?v=QqOShvk4Ne8) |
 
-The linked OneDrive source paths remain recorded in `records/references.json`.
 The selected book is currently one reference per book topic; new reference
 books can be added later without changing the dashboard design.
 
 ## Topic folders
 
 All local notes, exercises, environments, and linked books are organized in
-`topics/<topic>/`. To add a topic, create its folder under `topics/` and add the
-topic and references to `config/study-plan.json`; book paths in that file are
-relative to the project root, so they start with `topics/<topic>/`. Video-only
-topics can also have a folder for their local notes and project files.
+`topics/<topic>/`. Create the matching topic and reference rows in SQLite. The
+web UI for adding topics is planned but not implemented yet. Book paths are
+relative to the project root and start with `topics/<topic>/`. Video-only topics
+can also have a folder for local notes and project files.

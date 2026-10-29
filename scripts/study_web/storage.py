@@ -13,14 +13,25 @@ from zoneinfo import ZoneInfo
 
 
 class StudyStore:
-    def __init__(self, root: Path, plan: dict[str, Any]):
+    def __init__(
+        self,
+        root: Path,
+        plan: dict[str, Any] | None = None,
+        *,
+        legacy_plan_path: Path | None = None,
+    ):
         self.root = root
-        self.plan = plan
-        self.timezone = ZoneInfo(plan["timezone"])
         self.db_path = root / "records" / "study.sqlite3"
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.progress_path = root / "records" / "progress.json"
+        self.legacy_plan_path = legacy_plan_path
         self._initialize()
+        if not self._has_plan():
+            self._initialize_plan(plan)
+        self.plan = self._load_plan()
+        self.timezone = ZoneInfo(self.plan["timezone"])
+        self._migrate_legacy_progress()
+        self._recover_open_sessions()
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.db_path, timeout=10)
@@ -82,6 +93,40 @@ class StudyStore:
                     created_at TEXT NOT NULL,
                     PRIMARY KEY(session_id, pdf_page)
                 );
+                CREATE TABLE IF NOT EXISTS study_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS study_topics (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    sort_order INTEGER NOT NULL UNIQUE
+                );
+                CREATE TABLE IF NOT EXISTS study_references (
+                    id TEXT PRIMARY KEY,
+                    topic_id TEXT NOT NULL REFERENCES study_topics(id) ON DELETE CASCADE,
+                    title TEXT NOT NULL,
+                    kind TEXT NOT NULL CHECK(kind IN ('book', 'video')),
+                    file_path TEXT,
+                    url TEXT,
+                    default_minutes INTEGER NOT NULL,
+                    sort_order INTEGER NOT NULL,
+                    UNIQUE(topic_id, sort_order),
+                    CHECK((kind = 'book' AND file_path IS NOT NULL) OR
+                          (kind = 'video' AND url IS NOT NULL))
+                );
+                CREATE TABLE IF NOT EXISTS weekly_assessment_topics (
+                    topic_id TEXT PRIMARY KEY REFERENCES study_topics(id) ON DELETE CASCADE,
+                    sort_order INTEGER NOT NULL UNIQUE
+                );
+                CREATE TABLE IF NOT EXISTS topic_progress (
+                    topic_id TEXT PRIMARY KEY REFERENCES study_topics(id) ON DELETE CASCADE,
+                    next_pdf_page INTEGER NOT NULL CHECK(next_pdf_page > 0)
+                );
+                CREATE TABLE IF NOT EXISTS reference_progress (
+                    reference_id TEXT PRIMARY KEY REFERENCES study_references(id) ON DELETE CASCADE,
+                    last_seconds INTEGER NOT NULL CHECK(last_seconds >= 0)
+                );
                 CREATE INDEX IF NOT EXISTS sessions_topic_idx
                     ON sessions(topic_id, reference_id, started_at);
                 CREATE INDEX IF NOT EXISTS exercises_session_idx
@@ -121,16 +166,164 @@ class StudyStore:
                 db.execute("ALTER TABLE sessions ADD COLUMN page_ranges TEXT NOT NULL DEFAULT '[]'")
             if "coach_mode" not in session_columns:
                 db.execute("ALTER TABLE sessions ADD COLUMN coach_mode TEXT NOT NULL DEFAULT 'coach'")
-        self._recover_open_sessions()
 
-    def _now_utc(self) -> datetime:
-        return datetime.now(timezone.utc)
+    def _has_plan(self) -> bool:
+        with self._connect() as db:
+            return db.execute("SELECT 1 FROM study_topics LIMIT 1").fetchone() is not None
 
-    def _now_text(self) -> str:
-        return self._now_utc().isoformat(timespec="seconds")
+    def _initialize_plan(self, plan: dict[str, Any] | None) -> None:
+        if plan is not None:
+            self._insert_plan(plan)
+            return
+        if self.legacy_plan_path and self.legacy_plan_path.is_file():
+            try:
+                legacy_plan = json.loads(self.legacy_plan_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as error:
+                raise RuntimeError(f"Could not import the old study plan: {error}") from error
+            self._insert_plan(legacy_plan)
+            try:
+                self.legacy_plan_path.unlink()
+            except OSError:
+                pass
+            return
+        # A fresh install can start with an empty plan. Topics will be added by
+        # the planned topic-management UI instead of being copied from defaults.
 
-    def local_datetime(self, value: str) -> datetime:
-        return datetime.fromisoformat(value).astimezone(self.timezone)
+    def _insert_plan(self, plan: dict[str, Any]) -> None:
+        with self._connect() as db:
+            db.execute(
+                "INSERT OR IGNORE INTO study_settings(key, value) VALUES('timezone', ?)",
+                (str(plan["timezone"]),),
+            )
+            weekly = plan.get("weekly_assessment", {})
+            db.execute(
+                "INSERT OR IGNORE INTO study_settings(key, value) "
+                "VALUES('weekly_assessment_minutes', ?)",
+                (str(int(weekly.get("minutes_per_topic", 0))),),
+            )
+            for topic_order, (topic_id, topic) in enumerate(plan["topics"].items()):
+                db.execute(
+                    "INSERT OR IGNORE INTO study_topics(id, title, sort_order) VALUES(?, ?, ?)",
+                    (topic_id, str(topic["title"]), topic_order),
+                )
+                for reference_order, reference in enumerate(topic.get("references", [])):
+                    db.execute(
+                        """INSERT OR IGNORE INTO study_references
+                           (id, topic_id, title, kind, file_path, url, default_minutes, sort_order)
+                           VALUES(?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            str(reference["id"]),
+                            topic_id,
+                            str(reference["title"]),
+                            str(reference["kind"]),
+                            reference.get("path"),
+                            reference.get("url"),
+                            int(reference["default_minutes"]),
+                            reference_order,
+                        ),
+                    )
+            for order, topic_id in enumerate(weekly.get("topics", [])):
+                db.execute(
+                    "INSERT OR IGNORE INTO weekly_assessment_topics(topic_id, sort_order) "
+                    "VALUES(?, ?)",
+                    (str(topic_id), order),
+                )
+
+    def _load_plan(self) -> dict[str, Any]:
+        with self._connect() as db:
+            settings = {
+                row["key"]: row["value"]
+                for row in db.execute("SELECT key, value FROM study_settings")
+            }
+            topics: dict[str, dict[str, Any]] = {}
+            for row in db.execute("SELECT id, title FROM study_topics ORDER BY sort_order"):
+                topics[row["id"]] = {"title": row["title"], "references": []}
+            references = db.execute(
+                """SELECT id, topic_id, title, kind, file_path, url, default_minutes
+                   FROM study_references ORDER BY topic_id, sort_order"""
+            ).fetchall()
+            for row in references:
+                reference = {
+                    "id": row["id"],
+                    "title": row["title"],
+                    "kind": row["kind"],
+                    "default_minutes": int(row["default_minutes"]),
+                }
+                if row["file_path"] is not None:
+                    reference["path"] = row["file_path"]
+                if row["url"] is not None:
+                    reference["url"] = row["url"]
+                topics[row["topic_id"]]["references"].append(reference)
+            weekly_topics = [
+                row["topic_id"]
+                for row in db.execute(
+                    "SELECT topic_id FROM weekly_assessment_topics ORDER BY sort_order"
+                )
+            ]
+        return {
+            "timezone": settings.get("timezone", "UTC"),
+            "weekly_assessment": {
+                "minutes_per_topic": int(settings.get("weekly_assessment_minutes", 0)),
+                "topics": weekly_topics,
+            },
+            "topics": topics,
+        }
+
+    def _migrate_legacy_progress(self) -> None:
+        with self._connect() as db:
+            migrated = db.execute(
+                "SELECT 1 FROM study_settings WHERE key='progress_json_migrated_v1'"
+            ).fetchone()
+        if migrated:
+            return
+
+        legacy = {"topics": {}, "resources": {}}
+        if self.progress_path.is_file():
+            try:
+                legacy = json.loads(self.progress_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as error:
+                raise RuntimeError(f"Could not import saved resume positions: {error}") from error
+        valid_topics = set(self.plan["topics"])
+        valid_references = {
+            reference["id"]
+            for topic in self.plan["topics"].values()
+            for reference in topic["references"]
+        }
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            for topic_id, value in legacy.get("topics", {}).items():
+                if topic_id not in valid_topics or not isinstance(value, dict):
+                    continue
+                try:
+                    next_page = int(value["next_pdf_page"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if next_page > 0:
+                    db.execute(
+                        "INSERT OR IGNORE INTO topic_progress(topic_id, next_pdf_page) VALUES(?, ?)",
+                        (topic_id, next_page),
+                    )
+            for reference_id, value in legacy.get("resources", {}).items():
+                if reference_id not in valid_references or not isinstance(value, dict):
+                    continue
+                try:
+                    last_seconds = max(0, int(value.get("last_seconds", 0)))
+                except (TypeError, ValueError):
+                    continue
+                db.execute(
+                    "INSERT OR IGNORE INTO reference_progress(reference_id, last_seconds) "
+                    "VALUES(?, ?)",
+                    (reference_id, last_seconds),
+                )
+            db.execute(
+                "INSERT INTO study_settings(key, value) VALUES('progress_json_migrated_v1', '1')"
+            )
+
+        if self.progress_path.is_file():
+            try:
+                self.progress_path.unlink()
+            except OSError:
+                pass
 
     def _recover_open_sessions(self) -> None:
         with self._connect() as db:
@@ -150,6 +343,15 @@ class StudyStore:
                     (elapsed, row["id"]),
                 )
 
+    def _now_utc(self) -> datetime:
+        return datetime.now(timezone.utc)
+
+    def _now_text(self) -> str:
+        return self._now_utc().isoformat(timespec="seconds")
+
+    def local_datetime(self, value: str) -> datetime:
+        return datetime.fromisoformat(value).astimezone(self.timezone)
+
     def _references(self) -> dict[str, tuple[str, str, str]]:
         output: dict[str, tuple[str, str, str]] = {}
         for topic_id, topic in self.plan["topics"].items():
@@ -162,14 +364,58 @@ class StudyStore:
         return output
 
     def progress(self) -> dict[str, Any]:
-        if self.progress_path.exists():
-            return json.loads(self.progress_path.read_text(encoding="utf-8"))
-        return {"topics": {}, "resources": {}}
+        with self._connect() as db:
+            topics = db.execute(
+                "SELECT topic_id, next_pdf_page FROM topic_progress ORDER BY topic_id"
+            ).fetchall()
+            resources = db.execute(
+                "SELECT reference_id, last_seconds FROM reference_progress ORDER BY reference_id"
+            ).fetchall()
+        return {
+            "topics": {
+                row["topic_id"]: {"next_pdf_page": int(row["next_pdf_page"])}
+                for row in topics
+            },
+            "resources": {
+                row["reference_id"]: {"last_seconds": int(row["last_seconds"])}
+                for row in resources
+            },
+        }
 
     def _save_progress(self, progress: dict[str, Any]) -> None:
-        temporary = self.progress_path.with_suffix(".json.tmp")
-        temporary.write_text(json.dumps(progress, indent=2) + "\n", encoding="utf-8")
-        temporary.replace(self.progress_path)
+        known_topics = set(self.plan["topics"])
+        known_references = {
+            reference["id"]
+            for topic in self.plan["topics"].values()
+            for reference in topic["references"]
+        }
+        with self._connect() as db:
+            for topic_id, value in progress.get("topics", {}).items():
+                if topic_id not in known_topics or not isinstance(value, dict):
+                    continue
+                try:
+                    next_page = int(value["next_pdf_page"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if next_page < 1:
+                    continue
+                db.execute(
+                    """INSERT INTO topic_progress(topic_id, next_pdf_page) VALUES(?, ?)
+                       ON CONFLICT(topic_id) DO UPDATE SET next_pdf_page=excluded.next_pdf_page""",
+                    (topic_id, next_page),
+                )
+            for reference_id, value in progress.get("resources", {}).items():
+                if reference_id not in known_references or not isinstance(value, dict):
+                    continue
+                try:
+                    last_seconds = max(0, int(value.get("last_seconds", 0)))
+                except (TypeError, ValueError):
+                    continue
+                db.execute(
+                    """INSERT INTO reference_progress(reference_id, last_seconds) VALUES(?, ?)
+                       ON CONFLICT(reference_id) DO UPDATE SET last_seconds=excluded.last_seconds""",
+                    (reference_id, last_seconds),
+                )
 
     def list_references(self) -> list[dict[str, Any]]:
         saved = self.progress()

@@ -42,6 +42,9 @@ class StudyStoreTests(unittest.TestCase):
             json.dumps(progress), encoding="utf-8"
         )
         self.store = StudyStore(self.root, sample_plan())
+        self.assertFalse((self.root / "records" / "progress.json").exists())
+        self.assertEqual(self.store.progress()["topics"]["linux"]["next_pdf_page"], 4)
+        self.assertEqual(self.store.progress()["resources"]["freecad-robot-arm"]["last_seconds"], 0)
 
     def tearDown(self) -> None:
         self.temp.cleanup()

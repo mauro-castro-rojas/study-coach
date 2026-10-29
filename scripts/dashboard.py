@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import subprocess
 import sys
 from pathlib import Path
@@ -59,9 +58,7 @@ def main() -> int:
         print("See README.md for Node.js setup instructions.", file=sys.stderr)
         return 1
 
-    plan_path = ROOT / "config" / "study-plan.json"
-    plan = json.loads(plan_path.read_text(encoding="utf-8"))
-    app = StudyApplication(ROOT, plan)
+    app = StudyApplication(ROOT)
     try:
         server = StudyHTTPServer(("127.0.0.1", args.port), app)
     except OSError as error:

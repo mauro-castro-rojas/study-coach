@@ -20,10 +20,13 @@ from .storage import StudyStore
 
 
 class StudyApplication:
-    def __init__(self, root: Path, plan: dict[str, Any]):
+    def __init__(self, root: Path):
         self.root = root
-        self.plan = plan
-        self.store = StudyStore(root, plan)
+        self.store = StudyStore(
+            root,
+            legacy_plan_path=root / "config" / "study-plan.json",
+        )
+        self.plan = self.store.plan
         self.web_root = root / "web"
         self.skill_path = root / ".agents" / "skills" / "study-coach" / "SKILL.md"
         self._bridge: CodexAppServer | None = None

@@ -25,9 +25,9 @@ time or topic rotation.
 - Topic materials live under `topics/<topic>/`. Preserve existing user work,
   especially `topics/c/deitel4/`, `topics/python/grokking_algorithms/`, the
   calculus environment, Linux notes, and `topics/power_shell/`.
-- `records/progress.json` stores the current PDF and video resume cursors. The
-  dashboard continues to maintain those cursors; new session history is stored
-  in SQLite and readable Markdown exports.
+- `records/study.sqlite3` stores the study plan, current PDF and video resume
+  cursors, and session history. Legacy plan and progress JSON files are imported
+  into SQLite once when present.
 - Don’t invent requirements or add unrequested behavior. If important context 
   is missing or an implementation choice would change the requested behavior, 
   ask me before proceeding. Make reasonable assumptions only for routine 
