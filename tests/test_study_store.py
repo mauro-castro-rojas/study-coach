@@ -72,7 +72,11 @@ class StudyStoreTests(unittest.TestCase):
         exports = list((self.root / "records" / "sessions").glob("*.md"))
         self.assertEqual(len(exports), 1)
         self.assertIn("File permissions and ownership", exports[0].read_text(encoding="utf-8"))
-        self.assertTrue(list((self.root / "records" / "weekly").glob("*.md")))
+        week = self.store.local_datetime(final["started_at"]).date().isocalendar()
+        self.assertIn(f"{week.year}-W{week.week:02d}", [
+            record["id"] for record in self.store.weekly_records()
+        ])
+        self.assertIn("| Linux | Linux Bible | 1 |", self.store.weekly_summary(week.year, week.week))
 
     def test_only_one_open_session_at_a_time(self) -> None:
         self.store.start_session("linux", "blum-linux-bible", None, "4")

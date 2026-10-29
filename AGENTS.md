@@ -11,7 +11,7 @@ time or topic rotation.
 - The browser dashboard and its SQLite store are authoritative for actual
   active study time, learner-confirmed page/video positions, exercise results,
   and assessment grades. The app generates one readable Markdown file per
-  finished session and an updated weekly summary.
+  finished session; weekly summaries are calculated from SQLite when viewed.
 - The Codex app-server thread runs in read-only workspace mode. It teaches and
   reviews; it must not change study records itself. The dashboard writes data
   only after the learner confirms it.

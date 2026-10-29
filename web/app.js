@@ -844,7 +844,9 @@ function renderMarkdown(text) {
 }
 
 async function readStudyRecord(record, selectedButton) {
-  appState.selectedRecordKey = record.kind === "chats" ? record.session_id : record.filename;
+  appState.selectedRecordKey = record.kind === "chats"
+    ? record.session_id
+    : (record.id || record.filename);
   $("recordsList").querySelectorAll(".record-item").forEach((button) => button.classList.remove("selected"));
   selectedButton?.classList.add("selected");
   const content = $("recordContent");
@@ -854,7 +856,9 @@ async function readStudyRecord(record, selectedButton) {
   loading.textContent = "Loading record…";
   content.append(loading);
   try {
-    const recordKey = record.kind === "chats" ? record.session_id : record.filename;
+    const recordKey = record.kind === "chats"
+      ? record.session_id
+      : (record.id || record.filename);
     const data = await api(`/api/records/${record.kind}/${encodeURIComponent(recordKey)}`);
     const label = document.createElement("div");
     label.className = "record-type";
@@ -976,7 +980,7 @@ async function readStudyRecord(record, selectedButton) {
 }
 
 function recordKey(record) {
-  return record.kind === "chats" ? record.session_id : record.filename;
+  return record.kind === "chats" ? record.session_id : (record.id || record.filename);
 }
 
 function renderRecordList(autoSelect = false) {
@@ -1014,7 +1018,9 @@ function renderRecordList(autoSelect = false) {
     button.className = "record-item";
     button.innerHTML = '<span class="record-item-title"></span><small class="record-item-date"></small>';
     button.querySelector(".record-item-title").textContent = record.title;
-    button.querySelector(".record-item-date").textContent = record.date || record.filename.replace(/\.md$/, "");
+    button.querySelector(".record-item-date").textContent = record.date
+      || record.filename?.replace(/\.md$/, "")
+      || record.id;
     button.addEventListener("click", () => readStudyRecord(record, button));
     list.append(button);
   }

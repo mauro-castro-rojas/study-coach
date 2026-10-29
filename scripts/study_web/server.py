@@ -564,7 +564,7 @@ class StudyHandler(BaseHTTPRequestHandler):
     def _record_index(self) -> list[dict[str, str]]:
         entries: list[dict[str, str]] = []
         records_root = self.app.root / "records"
-        for kind in ("sessions", "weekly"):
+        for kind in ("sessions",):
             folder = records_root / kind
             if not folder.is_dir():
                 continue
@@ -584,6 +584,7 @@ class StudyHandler(BaseHTTPRequestHandler):
                     "date": record_path.stem[:10] if kind == "sessions" and re.match(r"^\d{4}-\d{2}-\d{2}", record_path.stem) else "",
                     "topic": title.split(" — ", 1)[0] if kind == "sessions" else "",
                 })
+        entries.extend(self.app.store.weekly_records())
         entries.extend(
             {"kind": "chats", **record}
             for record in self.app.store.chat_records()
@@ -603,6 +604,13 @@ class StudyHandler(BaseHTTPRequestHandler):
             record = self.app.store.chat_record(filename)
             if not record:
                 self._json(404, {"error": "Coach conversation not found."})
+                return
+            self._json(200, record)
+            return
+        if parts[2] == "weekly":
+            record = self.app.store.weekly_record(filename)
+            if not record:
+                self._json(404, {"error": "Weekly summary not found."})
                 return
             self._json(200, record)
             return

@@ -115,12 +115,12 @@ not a separate database or directory.
 Each page summary is keyed by `(session_id, pdf_page)` in `page_reads`. The
 `page_images` table stores screenshot metadata and relative paths; image bytes
 are PNG files under `records/attachments/<session-id>/`. PDF and video resume
-positions live in SQLite. The app generates session Markdown
-exports under `records/sessions/` and weekly summaries under `records/weekly/`.
-The Study Records browser reads these Markdown exports. SQLite remains the
-structured source of truth, so edit summaries in the app; directly editing a
-generated export is not a reliable way to update the database, and a later app
-write may replace it.
+positions live in SQLite. The app generates session Markdown exports under
+`records/sessions/`. Weekly summaries are calculated from the session and
+exercise rows in SQLite when opened in Study Records; no weekly summary file or
+database copy is saved. SQLite remains the structured source of truth, so edit
+summaries in the app; directly editing a generated session export is not a
+reliable way to update the database, and a later app write may replace it.
 
 These are local user data, excluded from Git. A fresh checkout creates its own
 database and records; it does not include another learner's records. To move a
@@ -230,17 +230,17 @@ contain recent transactions. Let SQLite manage them.
 
 To clear the study history from the portal, open **Study records**, select
 **Clear study records**, review the summary, and confirm. The action removes
-all saved sessions and their Coach conversations and exercise results, along with
-their pasted page screenshots and the Study Room generated session logs and
-weekly summaries. It keeps saved PDF/video resume positions and manually written
-Markdown files. The app blocks
+all saved sessions and their Coach conversations and exercise results, along
+with their pasted page screenshots and generated session logs. Weekly summaries
+then disappear because they are calculated from those sessions. It keeps saved
+PDF/video resume positions and manually written Markdown files. The app blocks
 the action while a session is active or paused; resume and finish that session
 first.
 
 The portal action is preferred because it removes the database rows, attached
-PNG files, and app-generated session and weekly Markdown exports together. A
-manual SQL deletion affects only SQLite. It leaves the Markdown exports and
-image files on disk, even though their database links are gone.
+PNG files, and app-generated session Markdown exports together. A manual SQL
+deletion affects only SQLite. It leaves the session exports and image files on
+disk, even though their database links are gone.
 
 If manually clearing SQLite only, stop Study Room, back up `records/` as
 described in [Inspect SQLite from WSL](#inspect-sqlite-from-wsl), then open the

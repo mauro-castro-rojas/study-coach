@@ -27,7 +27,6 @@ __pycache__/
 /records/references.json
 /records/runtime/
 /records/sessions/
-/records/weekly/
 # User-pasted page images (lossless PNG attachments).
 /records/attachments/**/*.png
 
